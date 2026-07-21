@@ -1,0 +1,14 @@
+# Log-shaped output: the interesting part is usually the tail and the errors,
+# and the same message repeats a lot. Guard against error cascades.
+- name: log-streams
+  match: '\b(tail|journalctl|dmesg)\b|(docker|kubectl|nomad) logs'
+  actions:
+    - collapse_repeats: 3
+    - cascade_guard: 5
+    - keep_head_tail: [15, 60]
+
+- name: curl-wget-progress
+  match: '\b(curl|wget)\b'
+  actions:
+    - drop_lines: '^\s*(\d+\s+\d+\s+\d+|% Total|Dload)'
+    - collapse_repeats: 3

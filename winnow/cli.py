@@ -1,0 +1,360 @@
+"""Command-line interface for Winnow."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from typing import List, Optional
+
+from . import __version__, core, hook
+from . import rules as rules_mod
+from . import semantic, tokens
+from .config import Config
+from .filters import all_filters
+from .store import Store, is_handle
+
+
+def _utf8_stdout() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def _print(text: str) -> None:
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write((text + "\n").encode("utf-8", "replace"))
+
+
+# --------------------------------------------------------------------------- #
+# run: execute a command and compress its output
+# --------------------------------------------------------------------------- #
+def cmd_run(args) -> int:
+    argv = list(args.rest)
+    if argv and argv[0] == "--":
+        argv = argv[1:]
+    if not argv:
+        _print("winnow: nothing to run (usage: wn run -- <command>)")
+        return 2
+
+    command = " ".join(argv)
+    try:
+        if args.shell:
+            proc = subprocess.run(command, shell=True, capture_output=True, text=True)
+        else:
+            try:
+                proc = subprocess.run(argv, capture_output=True, text=True)
+            except (FileNotFoundError, NotADirectoryError, OSError):
+                proc = subprocess.run(command, shell=True, capture_output=True,
+                                      text=True)
+    except Exception as exc:  # pragma: no cover - defensive
+        _print(f"winnow: failed to run command: {exc}")
+        return 1
+
+    raw = proc.stdout or ""
+    if proc.stderr:
+        raw = (raw + "\n" + proc.stderr) if raw else proc.stderr
+
+    store = None if args.no_remember else Store()
+    result = core.compress(
+        command=command,
+        raw=raw,
+        store=store,
+        remember=not args.no_remember,
+        exit_code=proc.returncode,
+        cwd=os.getcwd(),
+    )
+    _print(result.render(footer=not args.no_footer))
+    if store:
+        store.close()
+    return proc.returncode
+
+
+# --------------------------------------------------------------------------- #
+# filter: compress text piped in on stdin
+# --------------------------------------------------------------------------- #
+def cmd_filter(args) -> int:
+    raw = sys.stdin.read()
+    store = None if args.no_remember else Store()
+    result = core.compress(
+        command=args.cmd or "",
+        raw=raw,
+        store=store,
+        remember=not args.no_remember,
+        cwd=os.getcwd(),
+    )
+    _print(result.render(footer=not args.no_footer))
+    if store:
+        store.close()
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# recall: fetch a stored full output by handle, or search history
+# --------------------------------------------------------------------------- #
+def cmd_recall(args) -> int:
+    store = Store()
+    query = " ".join(args.query)
+    try:
+        if is_handle(query):
+            rec = store.get(query)
+            if not rec:
+                _print(f"winnow: no output with handle '{query}'")
+                return 1
+            text = rec.raw
+            if args.lines:
+                text = _slice_lines(text, args.lines)
+            _print(text)
+            return 0
+        # Otherwise treat as a full-text search over stored outputs.
+        hits = store.search(query, limit=args.limit)
+        if not hits:
+            _print(f"winnow: no stored output matches '{query}'")
+            return 1
+        for rec in hits:
+            snippet = " ".join(rec.raw.split())[:160]
+            _print(f"[{rec.id}] {rec.command[:70]}")
+            _print(f"        {snippet}")
+        return 0
+    finally:
+        store.close()
+
+
+def _slice_lines(text: str, spec: str) -> str:
+    lines = text.split("\n")
+    try:
+        if "-" in spec:
+            a, b = spec.split("-", 1)
+            start = int(a) - 1 if a else 0
+            end = int(b) if b else len(lines)
+        else:
+            start = int(spec) - 1
+            end = start + 1
+    except ValueError:
+        return text
+    return "\n".join(lines[max(0, start):end])
+
+
+# --------------------------------------------------------------------------- #
+# gain: savings analytics
+# --------------------------------------------------------------------------- #
+def cmd_gain(args) -> int:
+    store = Store()
+    t = store.totals()
+    exact = "exact (tiktoken)" if tokens.using_exact() else "estimated (heuristic)"
+    _print("─" * 52)
+    _print(f"  winnow savings · {t['count']} outputs compressed")
+    _print("─" * 52)
+    _print(f"  tokens in    : {t['raw']:>12,}")
+    _print(f"  tokens out   : {t['comp']:>12,}")
+    _print(f"  tokens saved : {t['saved']:>12,}")
+    _print(f"  reduction    : {t['pct']:>11.1f}%")
+    _print(f"  counting     : {exact}")
+    _print("─" * 52)
+    if args.history:
+        _print("  recent:")
+        for rec in store.recent(limit=args.limit):
+            saved = rec.raw_tokens - rec.comp_tokens
+            pct = (saved / rec.raw_tokens * 100) if rec.raw_tokens else 0
+            _print(f"    [{rec.id}] {pct:5.0f}%  "
+                   f"{rec.raw_tokens:>6}→{rec.comp_tokens:<6}  "
+                   f"{rec.label[:22]:22}  {rec.command[:40]}")
+    store.close()
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# discover: find the biggest un-compressed outputs still in the store
+# --------------------------------------------------------------------------- #
+def cmd_discover(args) -> int:
+    store = Store()
+    recs = sorted(store.recent(limit=500), key=lambda r: r.raw_tokens, reverse=True)
+    _print("Largest outputs seen (biggest token sinks first):")
+    for rec in recs[: args.limit]:
+        _print(f"  {rec.raw_tokens:>7,} tok  [{rec.id}]  {rec.command[:60]}")
+    store.close()
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# skim: structural skeleton of a source file
+# --------------------------------------------------------------------------- #
+def cmd_skim(args) -> int:
+    try:
+        source = open(args.file, "r", encoding="utf-8", errors="replace").read()
+    except OSError as exc:
+        _print(f"winnow: cannot read {args.file}: {exc}")
+        return 1
+    skeleton = None
+    if args.file.endswith(".py"):
+        skeleton = semantic.skim_python(source)
+    if skeleton is None:
+        js = semantic.compress_json(source)
+        if js is not None:
+            skeleton = js[0]
+    if skeleton is None:
+        _print("winnow: no structural skimmer for this file type "
+               "(supported: .py, .json)")
+        return 1
+    before, after = tokens.estimate(source), tokens.estimate(skeleton)
+    pct = (before - after) / before * 100 if before else 0
+    _print(skeleton)
+    _print(f"⟨winnow skim: {before}→{after} tok, saved {pct:.0f}%⟩")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# rules: inspect the rule engine
+# --------------------------------------------------------------------------- #
+def cmd_rules(args) -> int:
+    from .config import user_rules_dir
+
+    if args.action == "path":
+        _print(str(user_rules_dir()))
+        return 0
+    rules = rules_mod.load_rules()
+    if args.action == "test":
+        matched = [r.get("name", "?") for r in rules
+                   if r.get("match") and _safe_search(r["match"], args.cmd or "")]
+        _print(f"command: {args.cmd!r}")
+        _print(f"built-in filter: {_filter_for(args.cmd or '')}")
+        _print("matching rules: " + (", ".join(matched) if matched else "(none)"))
+        return 0
+    # default: list
+    _print(f"built-in filters: {', '.join(all_filters())}")
+    _print(f"rules loaded    : {len(rules)}")
+    for r in rules:
+        _print(f"  - {r.get('name','?'):24} match={r.get('match','')!r}")
+    return 0
+
+
+def _safe_search(pattern: str, text: str) -> bool:
+    import re
+    try:
+        return bool(re.search(pattern, text, re.IGNORECASE))
+    except re.error:
+        return False
+
+
+def _filter_for(command: str) -> str:
+    from .filters import detect
+    _, name = detect(command)
+    return name or "(none)"
+
+
+# --------------------------------------------------------------------------- #
+# hook: Claude Code / agent integration
+# --------------------------------------------------------------------------- #
+def cmd_hook(args) -> int:
+    if args.action == "run":
+        return hook.run_hook()
+    if args.action == "show":
+        _print(json.dumps(hook.settings_snippet(), indent=2))
+        _print("")
+        _print("Add the above to your Claude Code settings.json, or use the "
+               "prefix form directly:  wn run -- <command>")
+        return 0
+    if args.action == "install":
+        return _hook_install(args.settings)
+    return 2
+
+
+def _hook_install(settings_path: Optional[str]) -> int:
+    path = settings_path or os.path.join(
+        os.path.expanduser("~"), ".claude", "settings.json")
+    snippet = hook.settings_snippet()
+    data = {}
+    if os.path.exists(path):
+        try:
+            data = json.loads(open(path, encoding="utf-8").read())
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    hooks = data.setdefault("hooks", {})
+    pre = hooks.setdefault("PreToolUse", [])
+    if not any(json.dumps(e) == json.dumps(snippet["hooks"]["PreToolUse"][0])
+               for e in pre):
+        pre.append(snippet["hooks"]["PreToolUse"][0])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2))
+    _print(f"winnow: hook installed to {path}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# parser
+# --------------------------------------------------------------------------- #
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="winnow",
+        description="Winnow the noise out of your CLI output — keep the grain, "
+                    "stash the chaff, recall it anytime.",
+    )
+    p.add_argument("-V", "--version", action="version",
+                   version=f"winnow {__version__}")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    r = sub.add_parser("run", help="run a command and compress its output")
+    r.add_argument("--shell", action="store_true", help="run via the shell")
+    r.add_argument("--no-remember", action="store_true",
+                   help="do not store the full output for recall")
+    r.add_argument("--no-footer", action="store_true",
+                   help="suppress the savings/recall footer")
+    r.add_argument("rest", nargs=argparse.REMAINDER,
+                   help="-- <command and args>")
+    r.set_defaults(func=cmd_run)
+
+    f = sub.add_parser("filter", help="compress text piped on stdin")
+    f.add_argument("--cmd", default="", help="label the source command "
+                   "(drives which filters/rules apply)")
+    f.add_argument("--no-remember", action="store_true")
+    f.add_argument("--no-footer", action="store_true")
+    f.set_defaults(func=cmd_filter)
+
+    rc = sub.add_parser("recall", help="fetch a stored output by handle, or search")
+    rc.add_argument("query", nargs="+", help="handle (e.g. a1b2c3) or search text")
+    rc.add_argument("--lines", help="line range for a handle, e.g. 10-40")
+    rc.add_argument("--limit", type=int, default=10)
+    rc.set_defaults(func=cmd_recall)
+
+    g = sub.add_parser("gain", help="show token savings analytics")
+    g.add_argument("--history", action="store_true", help="list recent outputs")
+    g.add_argument("--limit", type=int, default=20)
+    g.set_defaults(func=cmd_gain)
+
+    d = sub.add_parser("discover", help="find the biggest token sinks seen")
+    d.add_argument("--limit", type=int, default=15)
+    d.set_defaults(func=cmd_discover)
+
+    s = sub.add_parser("skim", help="structural skeleton of a .py/.json file")
+    s.add_argument("file")
+    s.set_defaults(func=cmd_skim)
+
+    ru = sub.add_parser("rules", help="inspect the rule engine")
+    ru.add_argument("action", nargs="?", default="list",
+                    choices=["list", "path", "test"])
+    ru.add_argument("--cmd", help="command to test rule matching against")
+    ru.set_defaults(func=cmd_rules)
+
+    h = sub.add_parser("hook", help="Claude Code / agent integration")
+    h.add_argument("action", choices=["show", "run", "install"])
+    h.add_argument("--settings", help="path to settings.json for install")
+    h.set_defaults(func=cmd_hook)
+
+    return p
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    _utf8_stdout()
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

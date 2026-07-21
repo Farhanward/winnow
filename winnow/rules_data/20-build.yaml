@@ -1,0 +1,23 @@
+# Build tools and package managers: keep outcomes, fold the progress firehose.
+- name: cargo
+  match: 'cargo (build|run|test|check|clippy)'
+  actions:
+    - drop_lines: '^\s*(Compiling|Downloaded|Downloading|Updating) '
+    - collapse_repeats: 3
+
+- name: make-cmake-ninja
+  match: '\b(make|cmake|ninja|gcc|g\+\+|clang)\b'
+  actions:
+    - collapse_repeats: 3
+
+- name: docker-build
+  match: 'docker (build|compose|buildx)'
+  actions:
+    - drop_lines: '^#\d+ (DONE|CACHED|sha256|extracting|resolve )'
+    - collapse_repeats: 3
+
+- name: webpack-vite
+  match: '\b(webpack|vite|tsc|next build|ng build)\b'
+  actions:
+    - drop_lines: '^\s*(asset|orphan modules|\+ \d+ modules) '
+    - collapse_repeats: 3
