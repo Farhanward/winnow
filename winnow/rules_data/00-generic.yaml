@@ -1,0 +1,17 @@
+# Generic hygiene applied to every command. These actions are conservative and
+# lossless-in-spirit: strip terminal colour codes, clip absurdly long lines, and
+# fold consecutive near-identical lines. The full output is always recallable.
+- name: strip-ansi
+  match: '.*'
+  actions:
+    - strip_ansi: true
+
+- name: clip-monster-lines
+  match: '.*'
+  actions:
+    - max_line_len: 800
+
+- name: fold-repeats
+  match: '.*'
+  actions:
+    - collapse_repeats: 4

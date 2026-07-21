@@ -1,0 +1,16 @@
+# Git plumbing that rarely matters to a reader or a model.
+- name: git-diff-metadata
+  match: 'git (diff|show|format-patch)'
+  actions:
+    - drop_lines: '^(index [0-9a-f]|old mode |new mode |similarity index |dissimilarity index |new file mode |deleted file mode )'
+
+- name: git-log-fold
+  match: 'git log'
+  actions:
+    - collapse_repeats: 3
+
+- name: git-fetch-pull
+  match: 'git (fetch|pull|clone|push)'
+  actions:
+    - drop_lines: '^(Receiving objects|Resolving deltas|remote: (Counting|Compressing|Total) )'
+    - collapse_repeats: 3
