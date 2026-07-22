@@ -206,7 +206,7 @@ On a corpus of *real, mixed* command output (hundreds of everyday commands), the
 Contributions are welcome from everyone. New built-in filters, rule packs for tools you use, better structural compressors, a native port — all fair game. Open an issue or a PR.
 
 ```bash
-git clone https://github.com/OWNER/winnow
+git clone https://github.com/Farhanward/winnow
 cd winnow
 pip install -e ".[dev]"
 pytest
