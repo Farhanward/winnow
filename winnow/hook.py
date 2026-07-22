@@ -60,6 +60,7 @@ def run_hook(stdin_text: Optional[str] = None) -> int:
     if the command is eligible, emits a rewrite decision. Silence = no change.
     """
     data_raw = stdin_text if stdin_text is not None else sys.stdin.read()
+    data_raw = data_raw.lstrip("﻿")  # tolerate a UTF-8 BOM on stdin
     try:
         event = json.loads(data_raw) if data_raw.strip() else {}
     except json.JSONDecodeError:
