@@ -80,3 +80,10 @@ def run_hook(stdin_text: Optional[str] = None) -> int:
     }
     sys.stdout.write(json.dumps(decision))
     return 0
+
+
+if __name__ == "__main__":
+    # Lightweight entry point: `python -m winnow.hook` imports only this module
+    # (json/shlex/sys) — not the whole package — so it adds minimal latency to
+    # every Bash command the PreToolUse hook inspects.
+    raise SystemExit(run_hook())
