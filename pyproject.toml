@@ -1,22 +1,27 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "winnow-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "Winnow the noise out of your CLI output — keep the grain, stash the chaff, recall it anytime."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
-authors = [{ name = "Winnow contributors" }]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Farhan Almutairi" }]
 keywords = ["cli", "tokens", "llm", "compression", "context", "agents", "claude", "codex"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
     "Topic :: Utilities",
 ]
@@ -30,6 +35,7 @@ dev = ["pytest>=7.0"]
 Homepage = "https://github.com/Farhanward/winnow"
 Repository = "https://github.com/Farhanward/winnow"
 Issues = "https://github.com/Farhanward/winnow/issues"
+Changelog = "https://github.com/Farhanward/winnow/blob/main/CHANGELOG.md"
 
 [project.scripts]
 winnow = "winnow.cli:main"

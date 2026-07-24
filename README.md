@@ -1,49 +1,62 @@
-# 🌾 Winnow
+<p align="center">
+  <img src="assets/winnow-social-preview.png" alt="Winnow: compress noisy CLI output and recall every original" width="100%">
+</p>
 
-**Winnow the noise out of your CLI output — keep the grain, blow away the chaff, and stash the chaff so you can recall it anytime.**
+# Winnow
 
-Winnow is a token-optimizing proxy for command-line output. It sits between a command and whatever reads its output — an AI coding agent, a log pipeline, or you — and shrinks noisy output (install logs, JSON dumps, test runs, server logs) by **60–99%**, while keeping a full, searchable copy on disk so nothing is ever truly lost.
+[![CI](https://github.com/Farhanward/winnow/actions/workflows/ci.yml/badge.svg)](https://github.com/Farhanward/winnow/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/Farhanward/winnow)](https://github.com/Farhanward/winnow/releases)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-61d685)](LICENSE)
 
-It's built for the age of LLM coding agents, where every line a tool prints costs tokens, money, and context-window space. But it's just as useful for anyone who's tired of scrolling past 500 lines of `npm warn`.
+**Local-first CLI output compression for Codex, Claude Code, and your shell.**
+Winnow removes repetitive noise before an agent reads it, makes zero LLM calls,
+and keeps the complete original output in a searchable local store.
 
-```
+```text
 $ wn run -- npm install
 added 512 packages, and audited 513 packages in 8s
-72 packages are looking for funding
 found 0 vulnerabilities
-… ⟨45 npm warn/notice lines hidden⟩
-⟨winnow npm-install: 561→36 tok, saved 94% · full: wn recall a1b2c3⟩
+... <180 npm warn/notice lines hidden>
+<winnow npm-install: 3,060->37 tok, saved 99% - full: wn recall a1b2c3>
 ```
-
----
-
-## Why
-
-Command output is mostly noise. A package install prints a wall of deprecation warnings around one line that matters. An API response is 5,000 array elements when you needed the shape. A log tail repeats the same message 200 times. Feeding all of that to an LLM (or your eyes) is pure waste.
-
-Winnow removes the waste **safely**: it never throws anything away. Every full output is teed to a local store first, addressable by a short handle (`a1b2c3`) and full-text searchable. Compression is a *view*; the original is one command away (`wn recall a1b2c3`).
-
----
 
 ## Install
 
-```bash
-pip install winnow-cli
-```
-
-Optional, for exact token counts instead of the built-in heuristic:
+Install the latest release directly from GitHub:
 
 ```bash
-pip install "winnow-cli[tokens]"   # adds tiktoken
+pipx install "git+https://github.com/Farhanward/winnow.git@v0.1.1"
 ```
 
-Requires Python 3.9+. No other runtime dependencies beyond PyYAML.
+Or with `uv`:
 
----
+```bash
+uv tool install "git+https://github.com/Farhanward/winnow.git@v0.1.1"
+```
 
-## Quick start
+For an editable development install:
 
-**Wrap a command** — Winnow runs it, compresses the output, and prints a footer telling you how much it saved and how to get the full text back:
+```bash
+git clone https://github.com/Farhanward/winnow.git
+cd winnow
+python -m pip install -e ".[dev]"
+```
+
+Requires Python 3.9+. The only required runtime dependency is PyYAML. Install
+the `tokens` extra for exact `tiktoken` counts:
+
+```bash
+python -m pip install "winnow-cli[tokens] @ git+https://github.com/Farhanward/winnow.git@v0.1.1"
+```
+
+## See the difference
+
+<p align="center">
+  <img src="assets/winnow-demo.png" alt="Raw npm output compared with Winnow's compact, recallable view" width="100%">
+</p>
+
+Run any noisy command through Winnow:
 
 ```bash
 wn run -- pip install -r requirements.txt
@@ -51,96 +64,99 @@ wn run -- docker logs api
 wn run -- curl -s https://api.example.com/users
 ```
 
-**Filter piped text** — compress something already produced:
+Filter output that already exists:
 
 ```bash
 kubectl logs pod-xyz | wn filter --cmd "kubectl logs"
 cat huge-response.json | wn filter
 ```
 
-**Recall the full output** — by handle, or by searching everything Winnow has ever seen:
+Recall or search the full original:
 
 ```bash
-wn recall a1b2c3               # print the full original
-wn recall a1b2c3 --lines 40-80 # just those lines
-wn recall "connection refused" # full-text search across history
+wn recall a1b2c3
+wn recall a1b2c3 --lines 40-80
+wn recall "connection refused"
 ```
 
-**See your savings:**
+## Reproducible benchmark
+
+Run `python benchmarks/benchmark.py` to execute Winnow's real pipeline against
+deterministic synthetic fixtures:
+
+| Synthetic case | Before | After | Output tokens saved |
+|---|---:|---:|---:|
+| npm warning wall | 3,060 | 37 | **98.8%** |
+| pip satisfied chatter | 1,963 | 19 | **99.0%** |
+| JSON API response | 42,079 | 347 | **99.2%** |
+| repetitive server log | 4,445 | 40 | **99.1%** |
+
+These are deliberately noisy target cases, measured with the built-in
+character heuristic. They measure compression of individual command output,
+not an equal reduction in an agent's total context use, API bill, or task cost.
+See [benchmarks/README.md](benchmarks/README.md) for the method.
+
+## Why Winnow
+
+| Capability | Winnow | Basic truncation |
+|---|:---:|:---:|
+| Full original remains locally recallable | Yes | No |
+| Search across captured output | Yes | No |
+| Command-aware filters | Yes | No |
+| Structure-aware JSON compression | Yes | No |
+| User-defined YAML rules | Yes | No |
+| Requires an LLM or network request | No | No |
+| Automatic Claude Code and Codex hook | Yes | No |
+
+Winnow is a reversible view over command output. It tees the full result to a
+local SQLite store first, applies structural and declarative filters, and uses a
+safety valve: small outputs or weak reductions pass through unchanged.
+
+## Automatic agent integration
+
+Winnow includes a conservative PreToolUse hook. It wraps eligible read-heavy
+commands and leaves unknown or mutating commands alone.
 
 ```bash
-wn gain            # totals
-wn gain --history  # per-output breakdown
+wn hook show
+wn hook install
 ```
 
-**Skim a source file** down to its structure:
+`wn hook install` merges the hook into Claude Code's user settings. For Codex,
+merge the output of `wn hook show` into `~/.codex/hooks.json`, enable hooks, and
+review the hook in `/hooks`. On Windows, eligible PowerShell pipelines are
+encoded before wrapping so the original script remains intact.
 
-```bash
-wn skim app/models.py   # imports + signatures + docstrings, bodies elided
-wn skim response.json   # schema + samples instead of the whole payload
-```
+## How the pipeline works
 
----
+1. **Store first:** write the complete raw output to the local recall store.
+2. **Preserve structure:** compress JSON by shape instead of line slicing.
+3. **Use command context:** apply built-in filters for npm, pip, pytest, git,
+   and directory listings.
+4. **Apply rules:** run bundled and user-authored YAML passes for repeated
+   lines, error cascades, ANSI noise, and long output.
+5. **Check the win:** return the original when compression saves less than the
+   configured threshold.
 
-## How it works
+Everything lives under `$WINNOW_HOME` (default `~/.winnow`). The store is local
+and may contain sensitive command output, so protect it like shell history.
 
-Winnow runs output through layered passes and keeps the result only if it's a clear win. For any command:
+## Commands
 
-1. **Tee** — the full raw output is written to the recall store *before* anything else. This is the safety net that makes aggressive compression risk-free.
-2. **Structure-aware** — if the output is **JSON**, arrays are truncated to a representative sample, long strings are clipped, and deep nesting is elided, preserving the shape (keys and types). Line-based passes are skipped so the structure isn't corrupted.
-3. **Built-in filters** — fast, hand-written transforms for a handful of extremely common, extremely noisy commands (`npm/pip/yarn install`, `git status`, `pytest`, directory listings).
-4. **Declarative rules** — YAML rule packs (built-in + your own) that match a command with a regex and run ordered actions: drop lines, fold repeats, guard against error cascades, clip long lines, keep head/tail, and more.
-5. **Safety valve** — if the result doesn't save at least a configurable fraction of tokens (default 15%), or the output was tiny to begin with, Winnow passes the **original through untouched**. It compresses when it helps and gets out of the way when it doesn't.
+| Command | Purpose |
+|---|---|
+| `wn run -- <cmd>` | Run a command and compress its output |
+| `wn filter [--cmd LABEL]` | Compress stdin |
+| `wn recall <handle or query>` | Fetch or search full originals |
+| `wn gain [--history]` | Show token-reduction analytics |
+| `wn skim <file>` | Reduce Python or JSON to its structure |
+| `wn discover` | Find the largest stored token sources |
+| `wn rules [list, path, test]` | Inspect rule packs |
+| `wn hook [show, install, run]` | Configure agent integration |
 
-The model (or you) sees the compressed body plus a one-line footer:
+## Custom rules
 
-```
-⟨winnow <what-acted>: <before>→<after> tok, saved <pct>% · full: wn recall <handle>⟩
-```
-
-### Fold and fingerprint
-
-Repetitive output is normalized into *fingerprints* — numbers, hashes, UUIDs, timestamps and addresses are masked so near-identical lines collapse together:
-
-```
-2026-07-22 10:00:01 INFO worker heartbeat ok id=1000
-    … ⟨×200 similar lines⟩
-2026-07-22 10:30:00 ERROR db timeout after 30000ms retry=0
-    … ⟨×60 similar lines⟩
-```
-
----
-
-## Use it with an AI coding agent
-
-Winnow shrinks the tool output your agent has to read, so more of the context window goes to actual work.
-
-**Simplest:** tell the agent to prefix heavy commands with `wn run --`.
-
-**Automatic (Claude Code and Codex):** wire up the bundled PreToolUse hook, which rewrites eligible shell commands to the wrapped form for you. It only touches read-heavy commands and leaves mutating commands alone. On Codex for Windows, PowerShell pipelines are preserved by encoding the original script before passing it through Winnow.
-
-```bash
-wn hook show                # print the reusable PreToolUse snippet
-wn hook install             # merge it into ~/.claude/settings.json
-```
-
-For Codex, merge the `wn hook show` snippet into `~/.codex/hooks.json`, enable hooks, then review and approve the hook in `/hooks`.
-
-**Other agents / editors:** any tool that lets you wrap or alias shell commands can call `wn run -- <command>`. The compressed output — footer included — goes to stdout unchanged, and the child's exit code is preserved, so it's a transparent drop-in.
-
----
-
-## Customize with rules
-
-Rules are plain YAML, so you can tune Winnow to your own tools without writing code. Drop a `*.yaml` file in your rules directory:
-
-```bash
-wn rules path     # prints the directory ($WINNOW_HOME/rules)
-wn rules list     # show all loaded rules and built-in filters
-wn rules test --cmd "terraform apply"   # see what would match
-```
-
-Example — quiet down a chatty deploy tool:
+Add `*.yaml` files to the directory shown by `wn rules path`:
 
 ```yaml
 - name: my-deploy
@@ -153,67 +169,16 @@ Example — quiet down a chatty deploy tool:
     - summary: 'hid {dropped} deploy log lines'
 ```
 
-Supported actions: `drop_lines`, `keep_lines`, `replace`, `collapse_repeats`, `cascade_guard`, `keep_head_tail`, `max_line_len`, `strip_ansi`, `summary`. User rules load on top of the built-in packs.
-
----
-
-## Configuration
-
-Winnow keeps everything under `$WINNOW_HOME` (default `~/.winnow`): the recall store and your rule packs. Tunables live in `$WINNOW_HOME/config.json`:
-
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `min_saving` | `0.15` | Minimum fraction saved to keep the compressed version |
-| `min_tokens` | `40` | Outputs smaller than this are never compressed |
-| `collapse_threshold` | `3` | Fold runs of at least this many similar lines |
-| `keep_head` / `keep_tail` | `40` / `20` | Default head/tail sizes for trims |
-| `max_store_rows` | `5000` | Recall store cap (oldest pruned first) |
-
----
-
-## Measured results
-
-On purpose-built noisy outputs (the cases Winnow targets):
-
-| Command | Before → After | Saved |
-|---------|----------------|-------|
-| `npm install` (warning wall) | 561 → 36 tok | **94%** |
-| `pip install` (download chatter) | 247 → 31 tok | **87%** |
-| JSON API response (5k-item array) | 25,359 → 637 tok | **97%** |
-| Server log (repetitive + cascade) | 3,597 → 41 tok | **99%** |
-
-On a corpus of *real, mixed* command output (hundreds of everyday commands), the aggregate is more modest — because Winnow safely passes small and already-terse outputs straight through — while still averaging **~47% on the outputs it does compress**. It saves big where there's noise, and does no harm where there isn't.
-
-*(Token figures use the built-in heuristic; install the `tokens` extra for exact tiktoken counts.)*
-
----
-
-## Commands
-
-| Command | Does |
-|---------|------|
-| `wn run -- <cmd>` | Run a command and compress its output |
-| `wn filter [--cmd L]` | Compress text piped on stdin |
-| `wn recall <handle\|query>` | Fetch a stored output, or search history |
-| `wn gain [--history]` | Token-savings analytics |
-| `wn skim <file>` | Structural skeleton of a `.py`/`.json` file |
-| `wn discover` | Show the biggest token sinks seen |
-| `wn rules [list\|path\|test]` | Inspect the rule engine |
-| `wn hook [show\|install\|run]` | Agent/editor integration |
-
----
+Supported actions include `drop_lines`, `keep_lines`, `replace`,
+`collapse_repeats`, `cascade_guard`, `keep_head_tail`, `max_line_len`,
+`strip_ansi`, and `summary`.
 
 ## Contributing
 
-Contributions are welcome from everyone. New built-in filters, rule packs for tools you use, better structural compressors, a native port — all fair game. Open an issue or a PR.
-
-```bash
-git clone https://github.com/Farhanward/winnow
-cd winnow
-pip install -e ".[dev]"
-pytest
-```
+Issues and focused pull requests are welcome, especially sanitized examples of
+noisy commands that deserve a safe filter. Read [CONTRIBUTING.md](CONTRIBUTING.md)
+and report security issues privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE) — free to use, modify, extend, and redistribute, for everyone.
+[MIT](LICENSE)

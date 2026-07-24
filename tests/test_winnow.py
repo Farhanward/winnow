@@ -194,6 +194,17 @@ def test_core_json_path(isolated_home):
     assert r.comp_tokens < r.raw_tokens
 
 
+def test_core_handles_powershell_utf8_bom(isolated_home):
+    raw = "\ufeff" + "\n".join(
+        ["npm warn deprecated sample"] * 80 + ["added 3 packages"]
+    )
+    r = core.compress("npm install", raw, remember=False)
+
+    assert r.passthrough is False
+    assert not any(line.startswith("\ufeffnpm warn") for line in r.body.splitlines())
+    assert "80 npm warn/notice lines hidden" in r.body
+
+
 def test_gain_history_uses_stored_filter_name(isolated_home, capsys):
     s = Store()
     raw = "\n".join(["npm warn x"] * 100 + ["added 3 packages"])

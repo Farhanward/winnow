@@ -96,15 +96,18 @@ def compress(
 def _pipeline(command: str, raw: str, cfg: Config):
     """Return (compressed_body, label)."""
     parts: List[str] = []
+    # Windows PowerShell may prefix piped UTF-8 text with a BOM. Keep the raw
+    # copy intact for recall, but remove it from the view before detection.
+    view = raw.lstrip("\ufeff")
 
     # JSON is structural — exclusive path, line filters would corrupt it.
-    js = semantic.compress_json(raw)
+    js = semantic.compress_json(view)
     if js is not None:
         body, changed = js
-        if changed and len(body) < len(raw):
+        if changed and len(body) < len(view):
             return body, "json"
 
-    body = raw
+    body = view
 
     # Built-in structural filter for this command, if one matches.
     func, name = detect(command)
