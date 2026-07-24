@@ -269,4 +269,7 @@ def test_codex_hook_rewrites_shell_command(monkeypatch, capsys):
     assert hook.run_hook(event) == 0
     decision = json.loads(capsys.readouterr().out)
     updated = decision["hookSpecificOutput"]["updatedInput"]["command"]
-    assert updated.startswith("wn run -- powershell ")
+    if os.name == "nt":
+        assert updated.startswith("wn run -- powershell ")
+    else:
+        assert updated == "wn run -- rg -n TODO C:\\Projects"
