@@ -164,7 +164,7 @@ def cmd_gain(args) -> int:
             pct = (saved / rec.raw_tokens * 100) if rec.raw_tokens else 0
             _print(f"    [{rec.id}] {pct:5.0f}%  "
                    f"{rec.raw_tokens:>6}→{rec.comp_tokens:<6}  "
-                   f"{rec.label[:22]:22}  {rec.command[:40]}")
+                   f"{rec.filt[:22]:22}  {rec.command[:40]}")
     store.close()
     return 0
 
