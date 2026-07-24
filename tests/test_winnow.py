@@ -4,15 +4,17 @@ Runs fully offline. Each test that touches the store points WINNOW_HOME at a
 temporary directory so nothing leaks into the user's real recall store.
 """
 
+import base64
 import json
 import os
+from argparse import Namespace
 import sys
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from winnow import core, hook, patterns, rules, semantic, tokens
+from winnow import cli, core, hook, patterns, rules, semantic, tokens
 from winnow.config import Config
 from winnow.filters import detect
 from winnow.store import Store, is_handle
@@ -192,12 +194,41 @@ def test_core_json_path(isolated_home):
     assert r.comp_tokens < r.raw_tokens
 
 
+def test_gain_history_uses_stored_filter_name(isolated_home, capsys):
+    s = Store()
+    raw = "\n".join(["npm warn x"] * 100 + ["added 3 packages"])
+    core.compress("npm install", raw, store=s, remember=True)
+    s.close()
+
+    assert cli.cmd_gain(Namespace(history=True, limit=5)) == 0
+    out = capsys.readouterr().out
+    assert "recent:" in out
+    assert "npm" in out
+
+
 # --------------------------------------------------------------------------- #
 # hook eligibility
 # --------------------------------------------------------------------------- #
 def test_hook_wraps_simple_command():
     out = hook._wrapped("git status")
     assert out == "wn run -- git status"
+
+
+def test_hook_wraps_codex_powershell_search_without_changing_script():
+    command = "rg -n TODO C:\\Projects | Select-Object -First 20"
+    out = hook._wrapped(command, powershell=True)
+
+    assert out.startswith(
+        "wn run -- powershell -NoProfile -NonInteractive -EncodedCommand "
+    )
+    encoded = out.rsplit(" ", 1)[-1]
+    assert base64.b64decode(encoded).decode("utf-16le") == command
+
+
+def test_hook_wraps_codex_powershell_file_read():
+    assert hook._wrapped(
+        "Get-Content -LiteralPath C:\\large.log", powershell=True
+    )
 
 
 def test_hook_skips_pipelines():
@@ -208,3 +239,23 @@ def test_hook_skips_pipelines():
 def test_hook_skips_unknown_and_already_wrapped():
     assert hook._wrapped("rm -rf /tmp/x") is None
     assert hook._wrapped("wn run -- git status") is None
+
+
+def test_hook_keeps_mutating_powershell_commands_unwrapped():
+    assert hook._wrapped(
+        "Get-Content input.txt | Remove-Item output.txt", powershell=True
+    ) is None
+
+
+def test_codex_hook_rewrites_shell_command(monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_THREAD_ID", "test-thread")
+    event = json.dumps({
+        "tool_name": "shell_command",
+        "tool_input": {"command": "rg -n TODO C:\\Projects"},
+        "turn_id": "test-turn",
+    })
+
+    assert hook.run_hook(event) == 0
+    decision = json.loads(capsys.readouterr().out)
+    updated = decision["hookSpecificOutput"]["updatedInput"]["command"]
+    assert updated.startswith("wn run -- powershell ")

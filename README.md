@@ -117,12 +117,14 @@ Winnow shrinks the tool output your agent has to read, so more of the context wi
 
 **Simplest:** tell the agent to prefix heavy commands with `wn run --`.
 
-**Automatic (Claude Code):** wire up the bundled PreToolUse hook, which rewrites eligible `Bash` commands to the wrapped form for you. It only touches simple, read-heavy commands and never rewrites anything with shell metacharacters, so it can't change the meaning of a pipeline.
+**Automatic (Claude Code and Codex):** wire up the bundled PreToolUse hook, which rewrites eligible shell commands to the wrapped form for you. It only touches read-heavy commands and leaves mutating commands alone. On Codex for Windows, PowerShell pipelines are preserved by encoding the original script before passing it through Winnow.
 
 ```bash
-wn hook show                # print the settings.json snippet
+wn hook show                # print the reusable PreToolUse snippet
 wn hook install             # merge it into ~/.claude/settings.json
 ```
+
+For Codex, merge the `wn hook show` snippet into `~/.codex/hooks.json`, enable hooks, then review and approve the hook in `/hooks`.
 
 **Other agents / editors:** any tool that lets you wrap or alias shell commands can call `wn run -- <command>`. The compressed output — footer included — goes to stdout unchanged, and the child's exit code is preserved, so it's a transparent drop-in.
 
