@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a filter, rule pack, integration, or product improvement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What noisy output or workflow should Winnow improve?
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Safe example
+      description: Share a short, sanitized output sample when possible.
+      render: text
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired result
+      description: What signal should remain visible after compression?
+    validations:
+      required: true
