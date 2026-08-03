@@ -29,6 +29,9 @@ _WRAP = {
 # Shell metacharacters that make direct argv wrapping ambiguous.
 _META = set("|&;<>`$(){}")
 _UNSAFE_CHAIN = re.compile(r"(?:;|&&|\|\||>|<|[\r\n])")
+# Redirection that sends stdout to a file (``> out``, ``>> log``, ``1> out``).
+# ``2>&1`` and friends are excluded: they merge streams we still want to read.
+_FILE_REDIRECT = re.compile(r"(?:^|\s)\d?>>?\s*(?![&\d])\S")
 _MUTATING = re.compile(
     r"(?:^|[\s;&|])(?:"
     r"remove-item|rm|del|erase|rmdir|rd|format-\w*|clear-content|"
@@ -53,7 +56,12 @@ def settings_snippet(command: str = "wn hook run") -> dict:
     }
 
 
-def _wrapped(command: str, *, powershell: bool = False) -> Optional[str]:
+def _wrapped(
+    command: str,
+    *,
+    powershell: bool = False,
+    client: Optional[str] = None,
+) -> Optional[str]:
     cmd = command.strip()
     if not cmd:
         return None
@@ -61,6 +69,7 @@ def _wrapped(command: str, *, powershell: bool = False) -> Optional[str]:
         return None
     if _MUTATING.search(cmd):
         return None
+    shell_wrap = False
     if powershell:
         # Pipelines are safe here because the complete original script is
         # encoded and executed by PowerShell. Keep command chains and output
@@ -68,7 +77,13 @@ def _wrapped(command: str, *, powershell: bool = False) -> Optional[str]:
         if _UNSAFE_CHAIN.search(cmd):
             return None
     elif any(ch in _META for ch in cmd):
-        return None
+        # A pipeline cannot be wrapped as bare argv, but handing the whole line
+        # to ``sh -c`` lets Winnow read the combined output instead of skipping
+        # the command outright. Redirection to a file stays unwrapped: those
+        # bytes go to disk, so there is nothing for us to compress.
+        if _FILE_REDIRECT.search(cmd):
+            return None
+        shell_wrap = True
     try:
         first = shlex.split(cmd)[0]
     except ValueError:
@@ -76,13 +91,16 @@ def _wrapped(command: str, *, powershell: bool = False) -> Optional[str]:
     first = first.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].casefold()
     if first not in _WRAP:
         return None
+    client_arg = f"--client {client} " if client else ""
     if powershell:
         encoded = base64.b64encode(cmd.encode("utf-16le")).decode("ascii")
         return (
-            "wn run -- powershell -NoProfile -NonInteractive "
+            f"wn run {client_arg}-- powershell -NoProfile -NonInteractive "
             f"-EncodedCommand {encoded}"
         )
-    return f"wn run -- {cmd}"
+    if shell_wrap:
+        return f"wn run {client_arg}-- sh -c {shlex.quote(cmd)}"
+    return f"wn run {client_arg}-- {cmd}"
 
 
 def run_hook(stdin_text: Optional[str] = None) -> int:
@@ -95,11 +113,22 @@ def run_hook(stdin_text: Optional[str] = None) -> int:
         event = json.loads(data_raw) if data_raw.strip() else {}
     except json.JSONDecodeError:
         return 0
-    if event.get("tool_name") not in {"Bash", "shell_command", "exec_command"}:
+    tool_name = str(event.get("tool_name") or "")
+    short_name = tool_name.rsplit("__", 1)[-1].rsplit(".", 1)[-1]
+    if short_name not in {"Bash", "shell_command", "exec_command"}:
         return 0
     command = (event.get("tool_input") or {}).get("command", "")
     is_codex = bool(event.get("turn_id") or os.environ.get("CODEX_THREAD_ID"))
-    new_cmd = _wrapped(command, powershell=os.name == "nt" and is_codex)
+    client = "codex" if is_codex else "claude"
+    new_cmd = _wrapped(
+        command,
+        powershell=os.name == "nt" and is_codex,
+        client=client,
+    )
+    from . import efficiency
+
+    already_wrapped = command.strip().startswith(("wn ", "winnow "))
+    efficiency.observe(client, selected=bool(new_cmd) or already_wrapped)
     if not new_cmd:
         return 0
     decision = {
