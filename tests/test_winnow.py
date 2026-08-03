@@ -242,14 +242,39 @@ def test_hook_wraps_codex_powershell_file_read():
     )
 
 
-def test_hook_skips_pipelines():
-    assert hook._wrapped("git log | head") is None
+def test_hook_wraps_pipelines_through_sh():
+    # A pipeline cannot be wrapped as bare argv, so the whole line goes to
+    # `sh -c` and Winnow reads the combined output.
+    assert hook._wrapped("git log | head") == "wn run -- sh -c 'git log | head'"
+    assert hook._wrapped("cargo check 2>&1 | tail -25") == (
+        "wn run -- sh -c 'cargo check 2>&1 | tail -25'"
+    )
+
+
+def test_hook_skips_redirection_to_file():
+    # The bytes land on disk, so there is nothing left for Winnow to compress.
+    assert hook._wrapped("cargo tree > out.txt") is None
+    assert hook._wrapped("cargo tree >> log") is None
     assert hook._wrapped("cat x > y") is None
+
+
+def test_hook_still_skips_unwrappable_first_tokens_in_pipelines():
+    assert hook._wrapped("ffprobe movie.mp4 | head -5") is None
 
 
 def test_hook_skips_unknown_and_already_wrapped():
     assert hook._wrapped("rm -rf /tmp/x") is None
     assert hook._wrapped("wn run -- git status") is None
+
+
+def test_powershell_path_is_unaffected_by_sh_wrapping():
+    # Codex runs through the PowerShell branch. It must keep encoding the whole
+    # script and must never be rewritten to `sh -c`.
+    out = hook._wrapped("rg -n TODO . | Select-Object -First 5", powershell=True)
+    assert "sh -c" not in out
+    assert "-EncodedCommand" in out
+    # Chains stay unwrapped on the PowerShell path, as before.
+    assert hook._wrapped("rg -n TODO . > out.txt", powershell=True) is None
 
 
 def test_hook_keeps_mutating_powershell_commands_unwrapped():
@@ -258,7 +283,7 @@ def test_hook_keeps_mutating_powershell_commands_unwrapped():
     ) is None
 
 
-def test_codex_hook_rewrites_shell_command(monkeypatch, capsys):
+def test_codex_hook_rewrites_shell_command(isolated_home, monkeypatch, capsys):
     monkeypatch.setenv("CODEX_THREAD_ID", "test-thread")
     event = json.dumps({
         "tool_name": "shell_command",
@@ -270,6 +295,6 @@ def test_codex_hook_rewrites_shell_command(monkeypatch, capsys):
     decision = json.loads(capsys.readouterr().out)
     updated = decision["hookSpecificOutput"]["updatedInput"]["command"]
     if os.name == "nt":
-        assert updated.startswith("wn run -- powershell ")
+        assert updated.startswith("wn run --client codex -- powershell ")
     else:
-        assert updated == "wn run -- rg -n TODO C:\\Projects"
+        assert updated == "wn run --client codex -- rg -n TODO C:\\Projects"

@@ -127,6 +127,34 @@ merge the output of `wn hook show` into `~/.codex/hooks.json`, enable hooks, and
 review the hook in `/hooks`. On Windows, eligible PowerShell pipelines are
 encoded before wrapping so the original script remains intact.
 
+Pipelines and command chains are wrapped through `sh -c`, so a line such as
+`cargo check 2>&1 | tail -25` still reaches Winnow as a single captured output.
+This path needs a POSIX shell on `PATH`, which Git Bash provides on Windows.
+Two cases stay deliberately unwrapped:
+
+- Redirection to a file (`> out`, `>> log`). Those bytes go to disk, so there
+  is nothing to compress. Stream merges like `2>&1` are wrapped as normal.
+- Any command whose first token is outside the known read-heavy set, and any
+  command matching the mutating-command guard.
+
+## Runtime efficiency
+
+Winnow automatically keeps aggregate efficiency counters for Codex, Claude
+Code, and local agents:
+
+```bash
+wn efficiency
+wn efficiency --json
+```
+
+The collector is event-driven, so no background service runs. It stores only
+integer counters and a last-updated timestamp in `~/.winnow/efficiency.db`:
+shell calls observed, calls selected automatically, runs, compressed versus
+passthrough outputs, token estimates, and compression processing time. It never
+receives or stores commands, output, paths, prompts, thread IDs, or model names.
+Each runtime updates independently; an unused runtime remains `no data` for any
+length of time and never blocks collection for the others.
+
 ## How the pipeline works
 
 1. **Store first:** write the complete raw output to the local recall store.
@@ -149,6 +177,7 @@ and may contain sensitive command output, so protect it like shell history.
 | `wn filter [--cmd LABEL]` | Compress stdin |
 | `wn recall <handle or query>` | Fetch or search full originals |
 | `wn gain [--history]` | Show token-reduction analytics |
+| `wn efficiency [--json]` | Show aggregate efficiency by runtime |
 | `wn skim <file>` | Reduce Python or JSON to its structure |
 | `wn discover` | Find the largest stored token sources |
 | `wn rules [list, path, test]` | Inspect rule packs |
