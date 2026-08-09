@@ -362,18 +362,19 @@ def test_every_cmdlet_named_in_a_rule_can_reach_the_wrapper():
             f"the rule names Get-{suffix} but the hook will never wrap it")
 
 
-def test_antigravity_runs_are_counted(tmp_path):
-    """Before this label existed, `wn run --client antigravity` recorded
-    nothing: detect_client mapped it to "unknown" and both writers dropped
-    every unknown label without a word. Antigravity has no hook system, so
-    explicit runs are the only numbers it can ever contribute.
+def test_gemini_runs_are_counted(tmp_path):
+    """Before this label existed, `wn run --client gemini` recorded nothing:
+    detect_client mapped it to "unknown" and both writers dropped every unknown
+    label without a word. Gemini has no hook system, so explicit runs are the
+    only numbers it can ever contribute.
     """
     collector = efficiency.Collector(tmp_path / "e.sqlite3")
-    collector.record_run("antigravity", raw_tokens=1000, output_tokens=250,
+    collector.record_run("gemini", raw_tokens=1000, output_tokens=250,
                          compressed=True, process_ns=1)
-    collector.observe("gemini", selected=True)
+    # The editor's name reaches the same row as the model's.
+    collector.observe("antigravity", selected=True)
 
-    row = collector.snapshot()["antigravity"]
+    row = collector.snapshot()["gemini"]
     collector.close()
 
     assert row.runs == 1
@@ -381,11 +382,19 @@ def test_antigravity_runs_are_counted(tmp_path):
     assert row.observed == 1
 
 
+def test_the_editor_name_is_an_alias_for_the_runtime():
+    """Antigravity is where Gemini runs, not a runtime of its own. Counting it
+    as a fourth label would have split one runtime's numbers across two rows.
+    """
+    for spelling in ("gemini", "antigravity", "gemini-antigravity", "GEMINI"):
+        assert efficiency.detect_client(spelling) == "gemini", spelling
+
+
 def test_a_runtime_can_name_itself_through_the_environment(monkeypatch):
-    """No variable identifies Antigravity, and inventing one would have given
-    a label that never matched anything.
+    """No variable identifies Gemini or the editor it runs in, and inventing
+    one would have given a label that never matched anything.
     """
     monkeypatch.delenv("CLAUDECODE", raising=False)
-    assert efficiency.detect_client(env={"WINNOW_CLIENT": "antigravity"}) == "antigravity"
+    assert efficiency.detect_client(env={"WINNOW_CLIENT": "gemini"}) == "gemini"
     # An explicit --client still wins over the environment.
-    assert efficiency.detect_client("codex", env={"WINNOW_CLIENT": "antigravity"}) == "codex"
+    assert efficiency.detect_client("codex", env={"WINNOW_CLIENT": "gemini"}) == "codex"
