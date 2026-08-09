@@ -134,17 +134,21 @@ leaves most of the output uncompressed.
 
 ### Editors with no hook system
 
-Antigravity runs no PreToolUse hook, so nothing rewrites its commands for it.
-There it has to be explicit:
+Gemini, in Antigravity, runs no PreToolUse hook, so nothing rewrites its
+commands for it. There it has to be explicit:
 
 ```bash
-wn run --client antigravity -- pkg install -y redis
+wn run --client gemini -- pkg install -y redis
 ```
 
-Set `WINNOW_CLIENT=antigravity` in the terminal profile and the label is picked
-up without the flag. Any runtime can name itself this way; nothing here sniffs
-for an Antigravity-specific variable, because it does not publish one and a
+Set `WINNOW_CLIENT=gemini` in the terminal profile and the label is picked up
+without the flag. Any runtime can name itself this way; nothing here sniffs for
+a variable, because neither the model nor the editor publishes one and a
 guessed name would be a label that silently never matched.
+
+The label names the runtime, not the editor around it, the same way `claude`
+and `codex` do. `antigravity` is accepted as an alias so both spellings land in
+one row instead of splitting a runtime's numbers across two.
 
 ### What a hook cannot reach
 
@@ -167,7 +171,7 @@ Two cases stay deliberately unwrapped:
 ## Runtime efficiency
 
 Winnow keeps aggregate efficiency counters per runtime: Codex, Claude Code,
-Antigravity, and local agents.
+Gemini, and local agents.
 
 ```bash
 wn efficiency
@@ -180,7 +184,7 @@ A real table, from the machine this was developed on:
 runtime     seen/auto   runs  compressed   tokens in→out     saved  last update
 codex          2/2       925      47  108,632,511→21,333,619   80.4%  2026-08-03
 claude      1647/34       34       6   108,389→41,630     61.6%  2026-08-06
-antigravity    0/0         0       0  no data                   -
+gemini         0/0         0       0  no data                   -
 local        202/20       20       0    30,682→30,682      0.0%  2026-07-25
 ```
 
@@ -191,7 +195,7 @@ Claude's absolute saving is small next to Codex's. `codex` shows the opposite
 shape, two observations against 925 runs, because those runs arrived through an
 explicit `wn run` rather than through a hook.
 
-`antigravity` reads `no data` here because the label is new. An unused runtime
+`gemini` reads `no data` here because the label is new. An unused runtime
 stays that way indefinitely and never blocks collection for the others.
 
 The collector is event-driven, so no background service runs. It stores only
