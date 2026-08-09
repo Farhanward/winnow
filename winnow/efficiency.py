@@ -16,11 +16,18 @@ from typing import Dict, Mapping, Optional
 
 from . import config
 
-CLIENTS = ("codex", "claude", "local")
+CLIENTS = ("codex", "claude", "antigravity", "local")
 _ALIASES = {
     "codex": "codex",
     "claude": "claude",
     "claude-code": "claude",
+    # Antigravity has no hook system, so nothing rewrites its commands for it.
+    # It reaches these counters only by calling `wn run --client antigravity`
+    # itself, which is why the label exists: without it every such run was
+    # dropped on the floor by the CLIENTS check below.
+    "antigravity": "antigravity",
+    "gemini": "antigravity",
+    "gemini-antigravity": "antigravity",
     "local": "local",
     "localagent": "local",
     "lmstudio": "local",
@@ -41,6 +48,13 @@ def detect_client(
         return _ALIASES.get(explicit.strip().casefold(), "unknown")
 
     values = os.environ if env is None else env
+    # An editor that sets no recognisable variable of its own can still name
+    # itself here. Antigravity is the case this was added for: it ships no
+    # marker this code could sniff, and guessing one would have produced a
+    # label that silently never matched.
+    named = values.get("WINNOW_CLIENT")
+    if named:
+        return _ALIASES.get(named.strip().casefold(), "unknown")
     if values.get("CODEX_THREAD_ID") or values.get("CODEX_HOME"):
         return "codex"
     if (
@@ -91,7 +105,7 @@ class Snapshot:
 
 
 class Collector:
-    """Aggregate runtime counters in a three-row local SQLite database."""
+    """Aggregate runtime counters in a one-row-per-runtime SQLite database."""
 
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path) if path is not None else metrics_path()
