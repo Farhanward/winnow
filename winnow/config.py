@@ -25,6 +25,10 @@ def store_path() -> Path:
     return home() / "store.db"
 
 
+def efficiency_path() -> Path:
+    return home() / "efficiency.db"
+
+
 def user_rules_dir() -> Path:
     d = home() / "rules"
     d.mkdir(parents=True, exist_ok=True)
