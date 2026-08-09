@@ -16,18 +16,19 @@ from typing import Dict, Mapping, Optional
 
 from . import config
 
-CLIENTS = ("codex", "claude", "antigravity", "local")
+CLIENTS = ("codex", "claude", "gemini", "local")
 _ALIASES = {
     "codex": "codex",
     "claude": "claude",
     "claude-code": "claude",
-    # Antigravity has no hook system, so nothing rewrites its commands for it.
-    # It reaches these counters only by calling `wn run --client antigravity`
-    # itself, which is why the label exists: without it every such run was
-    # dropped on the floor by the CLIENTS check below.
-    "antigravity": "antigravity",
-    "gemini": "antigravity",
-    "gemini-antigravity": "antigravity",
+    # The runtime is Gemini. Antigravity is the editor it happens to sit in,
+    # the way Claude Code and Codex are the runtimes rather than the terminals
+    # they run in, so the label names the model and the editor is an alias.
+    # Neither has a hook system, so an explicit --client is the only route
+    # either of them has to these counters.
+    "gemini": "gemini",
+    "antigravity": "gemini",
+    "gemini-antigravity": "gemini",
     "local": "local",
     "localagent": "local",
     "lmstudio": "local",
