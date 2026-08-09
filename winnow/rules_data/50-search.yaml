@@ -1,0 +1,25 @@
+# Search tools. This file exists because of a measurement, not a hunch: the two
+# largest outputs in the recall store are both ripgrep runs, at 76 and 25
+# million tokens, and every rule that existed left them untouched. `rg` was in
+# the wrap set the whole time; nothing knew what to do with what it produced.
+#
+# What is wasteful in a search result is not repetition -- each hit differs in
+# line number and in content, so a fingerprint sees nothing to fold. It is
+# volume from a handful of files. A reader wants to know which files matched
+# and what a match looks like there.
+- name: ripgrep
+  match: '\b(rg|ripgrep|grep|ag|ack)\b'
+  actions:
+    # Tighter than the generic 800. A search hit longer than this is a minified
+    # bundle or a lock file, and the useful part is the start of the line.
+    - max_line_len: 300
+    - limit_per_file: 5
+    - collapse_repeats: 3
+
+# `--files`, `--files-with-matches` and `-l` print one path per line with no
+# hits at all, so the rule above has nothing to group. Long lists of paths fold
+# by their shared shape instead.
+- name: ripgrep-file-lists
+  match: '\b(rg|ripgrep|grep|fd|find)\b.*(--files-with-matches|--files\b|\s-l\b|\s-L\b)'
+  actions:
+    - collapse_repeats: 4
