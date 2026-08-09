@@ -122,10 +122,37 @@ wn hook show
 wn hook install
 ```
 
-`wn hook install` merges the hook into Claude Code's user settings. For Codex,
-merge the output of `wn hook show` into `~/.codex/hooks.json`, enable hooks, and
-review the hook in `/hooks`. On Windows, eligible PowerShell pipelines are
-encoded before wrapping so the original script remains intact.
+`wn hook install` merges the hook into Claude Code's user settings, on both the
+`Bash` and `PowerShell` matchers. For Codex, merge the output of `wn hook show`
+into `~/.codex/hooks.json`, enable hooks, and review the hook in `/hooks`. On
+Windows, eligible PowerShell pipelines are encoded before wrapping so the
+original script remains intact.
+
+Two matchers rather than one, because PowerShell arrives under its own tool
+name. A `Bash`-only hook never fires for it, which on a Windows workstation
+leaves most of the output uncompressed.
+
+### Editors with no hook system
+
+Antigravity runs no PreToolUse hook, so nothing rewrites its commands for it.
+There it has to be explicit:
+
+```bash
+wn run --client antigravity -- pkg install -y redis
+```
+
+Set `WINNOW_CLIENT=antigravity` in the terminal profile and the label is picked
+up without the flag. Any runtime can name itself this way; nothing here sniffs
+for an Antigravity-specific variable, because it does not publish one and a
+guessed name would be a label that silently never matched.
+
+### What a hook cannot reach
+
+A PreToolUse hook rewrites a tool's **input**. `Read`, `Grep` and `Glob` produce
+their output inside the agent, with no command line to rewrite and no output the
+hook ever sees, so no amount of matcher configuration compresses them. The
+saving there comes from asking for less: `head_limit` on `Grep`, and offset and
+limit ranges on `Read` instead of whole files.
 
 Pipelines and command chains are wrapped through `sh -c`, so a line such as
 `cargo check 2>&1 | tail -25` still reaches Winnow as a single captured output.
@@ -139,13 +166,33 @@ Two cases stay deliberately unwrapped:
 
 ## Runtime efficiency
 
-Winnow automatically keeps aggregate efficiency counters for Codex, Claude
-Code, and local agents:
+Winnow keeps aggregate efficiency counters per runtime: Codex, Claude Code,
+Antigravity, and local agents.
 
 ```bash
 wn efficiency
 wn efficiency --json
 ```
+
+A real table, from the machine this was developed on:
+
+```
+runtime     seen/auto   runs  compressed   tokens in→out     saved  last update
+codex          2/2       925      47  108,632,511→21,333,619   80.4%  2026-08-03
+claude      1647/34       34       6   108,389→41,630     61.6%  2026-08-06
+antigravity    0/0         0       0  no data                   -
+local        202/20       20       0    30,682→30,682      0.0%  2026-07-25
+```
+
+Read the columns before reading the percentages. `seen/auto` is the honest one:
+Claude Code's hook inspected 1,647 calls and selected 34. That ratio is the
+conservative guard working as designed, not a failure, but it is also the reason
+Claude's absolute saving is small next to Codex's. `codex` shows the opposite
+shape, two observations against 925 runs, because those runs arrived through an
+explicit `wn run` rather than through a hook.
+
+`antigravity` reads `no data` here because the label is new. An unused runtime
+stays that way indefinitely and never blocks collection for the others.
 
 The collector is event-driven, so no background service runs. It stores only
 integer counters and a last-updated timestamp in `~/.winnow/efficiency.db`:

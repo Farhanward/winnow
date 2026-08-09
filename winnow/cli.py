@@ -223,7 +223,7 @@ def cmd_efficiency(args) -> int:
 
     _print("winnow efficiency · aggregate counters only")
     _print(
-        "runtime    seen/auto   runs  compressed   tokens in→out"
+        "runtime     seen/auto   runs  compressed   tokens in→out"
         "     saved  last update"
     )
     for client, row in rows.items():
@@ -235,13 +235,13 @@ def cmd_efficiency(args) -> int:
         )
         if not row.runs:
             _print(
-                f"{client:<10} {row.observed:>4}/{row.selected:<4} "
+                f"{client:<11} {row.observed:>4}/{row.selected:<4} "
                 f"{row.runs:>6} {row.compressed:>7}  no data"
                 f"{'':>18} {last}"
             )
             continue
         _print(
-            f"{client:<10} {row.observed:>4}/{row.selected:<4} "
+            f"{client:<11} {row.observed:>4}/{row.selected:<4} "
             f"{row.runs:>6} {row.compressed:>7}  "
             f"{row.raw_tokens:>8,}→{row.output_tokens:<8,} "
             f"{row.reduction_pct:>6.1f}%  {last}"
@@ -385,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="do not store the full output for recall")
     r.add_argument("--no-footer", action="store_true",
                    help="suppress the savings/recall footer")
-    r.add_argument("--client", choices=["codex", "claude", "local"],
+    r.add_argument("--client", choices=efficiency.CLIENTS,
                    help="runtime label for aggregate efficiency metrics")
     r.add_argument("rest", nargs=argparse.REMAINDER,
                    help="-- <command and args>")
@@ -396,7 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
                    "(drives which filters/rules apply)")
     f.add_argument("--no-remember", action="store_true")
     f.add_argument("--no-footer", action="store_true")
-    f.add_argument("--client", choices=["codex", "claude", "local"],
+    f.add_argument("--client", choices=efficiency.CLIENTS,
                    help="runtime label for aggregate efficiency metrics")
     f.set_defaults(func=cmd_filter)
 

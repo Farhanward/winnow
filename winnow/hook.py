@@ -25,6 +25,15 @@ _WRAP = {
     "get-content", "gc", "type", "select-string", "sls", "get-childitem",
     "gci", "get-process", "gps", "get-service", "get-winevent",
     "get-ciminstance", "get-command", "get-module", "tree",
+    # Added after a session where the biggest outputs came from none of the
+    # above: a remote shell, a package manager on the far end of it, and the
+    # scripts driving both.
+    "ssh", "scp", "sftp", "pkg", "pkgin", "apt", "apt-get", "dnf", "yum",
+    "brew", "python", "python3", "py", "get-vm", "get-vhd", "get-disk",
+    "get-netipaddress", "get-vmswitch", "test-netconnection", "get-item",
+    # Kept in step with the powershell-tables rule in 40-remote.yaml: a rule
+    # that names a cmdlet this set does not admit is a rule that never runs.
+    "get-volume", "get-partition",
 }
 # Shell metacharacters that make direct argv wrapping ambiguous.
 _META = set("|&;<>`$(){}")
@@ -47,10 +56,14 @@ def settings_snippet(command: str = "wn hook run") -> dict:
     return {
         "hooks": {
             "PreToolUse": [
+                # Two matchers, not one. PowerShell is a separate tool with its
+                # own name, so a Bash-only matcher never fires for it -- which
+                # on a Windows workstation is most of the output there is.
                 {
-                    "matcher": "Bash",
+                    "matcher": matcher,
                     "hooks": [{"type": "command", "command": command}],
                 }
+                for matcher in ("Bash", "PowerShell")
             ]
         }
     }
@@ -115,14 +128,21 @@ def run_hook(stdin_text: Optional[str] = None) -> int:
         return 0
     tool_name = str(event.get("tool_name") or "")
     short_name = tool_name.rsplit("__", 1)[-1].rsplit(".", 1)[-1]
-    if short_name not in {"Bash", "shell_command", "exec_command"}:
+    if short_name not in {"Bash", "PowerShell", "shell_command", "exec_command"}:
         return 0
     command = (event.get("tool_input") or {}).get("command", "")
     is_codex = bool(event.get("turn_id") or os.environ.get("CODEX_THREAD_ID"))
     client = "codex" if is_codex else "claude"
+    # PowerShell needs its own quoting: the command is handed back base64 in
+    # UTF-16LE rather than as bare argv, which is why _wrapped has taken this
+    # flag since it was written.
+    is_powershell = short_name == "PowerShell"
     new_cmd = _wrapped(
         command,
-        powershell=os.name == "nt" and is_codex,
+        # Two ways to arrive at PowerShell: the tool that is one, and Codex on
+        # Windows, whose shell tool runs through it. The first was missing --
+        # the flag existed and only Codex could ever set it.
+        powershell=is_powershell or (os.name == "nt" and is_codex),
         client=client,
     )
     from . import efficiency
