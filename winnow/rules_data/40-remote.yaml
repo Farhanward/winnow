@@ -1,0 +1,52 @@
+# Remote shells, package managers and the scripts that drive them.
+#
+# Added after a long session whose largest outputs came from none of the rules
+# that existed: a package install on a machine at the far end of an ssh
+# connection, and the Python driving it. The generic rules caught some of it;
+# these catch the shape.
+
+# pkg prints one fetch line per package and one extract line per package, each
+# ending in a dot leader that grows with the terminal width. On a fresh install
+# that is several hundred lines, and the two that matter are the summary at the
+# top and the message at the end.
+- name: pkg-freebsd
+  match: '\bpkg\b'
+  actions:
+    - drop_lines: '^\[\d+/\d+\] (Fetching|Extracting|Installing) .*(done|\.\.\.)$'
+    - drop_lines: '^\s*\[\d+%\]'
+    - collapse_repeats: 3
+
+# apt and dnf do the same thing in their own dialect.
+- name: apt-dnf
+  match: '\b(apt|apt-get|dnf|yum)\b'
+  actions:
+    - drop_lines: '^(Get|Hit|Ign):\d+ '
+    - drop_lines: '^(Preparing to unpack|Unpacking|Selecting previously) '
+    - collapse_repeats: 3
+
+# ssh carries whatever the far end printed, so there is no shape to exploit
+# beyond the generic folding -- except the banner, which repeats on every
+# single connection and says nothing about the command that was run.
+- name: ssh-noise
+  match: '\b(ssh|scp|sftp)\b'
+  actions:
+    - drop_lines: '^(Warning: Permanently added|Pseudo-terminal will not|Connection to \S+ closed)'
+    - collapse_repeats: 4
+
+# Python's own noise: the deprecation warnings that precede real output, and
+# the pip progress bars. Tracebacks are left completely alone -- they are the
+# reason anyone reads this output at all.
+- name: python
+  match: '\b(python|python3|py)\b'
+  actions:
+    - drop_lines: '^\s*(DeprecationWarning|FutureWarning|UserWarning):'
+    - drop_lines: '^\s*\d+%\|[█▏▎▍▌▋▊▉ ]+\|'
+    - collapse_repeats: 4
+
+# Hyper-V and Windows cmdlets emit table headers, blank lines and dashed rules
+# between every object. The dashes carry no information at all.
+- name: powershell-tables
+  match: '\bGet-(VM|VHD|Disk|Partition|Volume|Service|Process|NetIPAddress|VMSwitch)\b'
+  actions:
+    - drop_lines: '^\s*-{3,}(\s+-{3,})*\s*$'
+    - collapse_repeats: 3

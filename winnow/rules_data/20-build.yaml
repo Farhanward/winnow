@@ -5,6 +5,23 @@
     - drop_lines: '^\s*(Compiling|Downloaded|Downloading|Updating) '
     - collapse_repeats: 3
 
+# `--message-format=json` emits one dense JSON object per line. The diagnostics
+# live in `compiler-message`; artifact and build-script records are bookkeeping
+# that no reader needs, and they dominate the byte count on a warm build.
+- name: cargo-json
+  match: 'cargo .*--message-format[ =]\S*json'
+  actions:
+    - drop_lines: '"reason":"(compiler-artifact|build-script-executed)"'
+    - collapse_repeats: 3
+
+# rustc renders one diagnostic across many lines. Keep the message and the
+# source span, fold the repeated pointer art that carries no new information.
+- name: rustc-diagnostics
+  match: '\b(cargo|rustc)\b'
+  actions:
+    - drop_lines: '^\s*\|\s*$'
+    - collapse_repeats: 3
+
 - name: make-cmake-ninja
   match: '\b(make|cmake|ninja|gcc|g\+\+|clang)\b'
   actions:

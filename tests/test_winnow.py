@@ -7,6 +7,8 @@ temporary directory so nothing leaks into the user's real recall store.
 import base64
 import json
 import os
+import pathlib
+import re
 from argparse import Namespace
 import sys
 
@@ -14,7 +16,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from winnow import cli, core, hook, patterns, rules, semantic, tokens
+from winnow import cli, core, efficiency, hook, patterns, rules, semantic, tokens
 from winnow.config import Config
 from winnow.filters import detect
 from winnow.store import Store, is_handle
@@ -242,14 +244,39 @@ def test_hook_wraps_codex_powershell_file_read():
     )
 
 
-def test_hook_skips_pipelines():
-    assert hook._wrapped("git log | head") is None
+def test_hook_wraps_pipelines_through_sh():
+    # A pipeline cannot be wrapped as bare argv, so the whole line goes to
+    # `sh -c` and Winnow reads the combined output.
+    assert hook._wrapped("git log | head") == "wn run -- sh -c 'git log | head'"
+    assert hook._wrapped("cargo check 2>&1 | tail -25") == (
+        "wn run -- sh -c 'cargo check 2>&1 | tail -25'"
+    )
+
+
+def test_hook_skips_redirection_to_file():
+    # The bytes land on disk, so there is nothing left for Winnow to compress.
+    assert hook._wrapped("cargo tree > out.txt") is None
+    assert hook._wrapped("cargo tree >> log") is None
     assert hook._wrapped("cat x > y") is None
+
+
+def test_hook_still_skips_unwrappable_first_tokens_in_pipelines():
+    assert hook._wrapped("ffprobe movie.mp4 | head -5") is None
 
 
 def test_hook_skips_unknown_and_already_wrapped():
     assert hook._wrapped("rm -rf /tmp/x") is None
     assert hook._wrapped("wn run -- git status") is None
+
+
+def test_powershell_path_is_unaffected_by_sh_wrapping():
+    # Codex runs through the PowerShell branch. It must keep encoding the whole
+    # script and must never be rewritten to `sh -c`.
+    out = hook._wrapped("rg -n TODO . | Select-Object -First 5", powershell=True)
+    assert "sh -c" not in out
+    assert "-EncodedCommand" in out
+    # Chains stay unwrapped on the PowerShell path, as before.
+    assert hook._wrapped("rg -n TODO . > out.txt", powershell=True) is None
 
 
 def test_hook_keeps_mutating_powershell_commands_unwrapped():
@@ -258,7 +285,7 @@ def test_hook_keeps_mutating_powershell_commands_unwrapped():
     ) is None
 
 
-def test_codex_hook_rewrites_shell_command(monkeypatch, capsys):
+def test_codex_hook_rewrites_shell_command(isolated_home, monkeypatch, capsys):
     monkeypatch.setenv("CODEX_THREAD_ID", "test-thread")
     event = json.dumps({
         "tool_name": "shell_command",
@@ -270,6 +297,95 @@ def test_codex_hook_rewrites_shell_command(monkeypatch, capsys):
     decision = json.loads(capsys.readouterr().out)
     updated = decision["hookSpecificOutput"]["updatedInput"]["command"]
     if os.name == "nt":
-        assert updated.startswith("wn run -- powershell ")
+        assert updated.startswith("wn run --client codex -- powershell ")
     else:
-        assert updated == "wn run -- rg -n TODO C:\\Projects"
+        assert updated == "wn run --client codex -- rg -n TODO C:\\Projects"
+
+
+def test_powershell_tool_is_wrapped_and_encoded(isolated_home, capsys):
+    """The PowerShell tool reaches the PowerShell path.
+
+    The encoding for it was written from the start and nothing could reach it:
+    run_hook accepted three tool names, none of them this one, so every
+    PowerShell call went through uncompressed. On a Windows workstation that is
+    most of the output there is.
+    """
+    event = json.dumps({
+        "tool_name": "PowerShell",
+        "tool_input": {"command": "Get-VM"},
+    })
+
+    assert hook.run_hook(event) == 0
+    updated = json.loads(capsys.readouterr().out)[
+        "hookSpecificOutput"]["updatedInput"]["command"]
+    assert updated.startswith("wn run --client claude -- powershell ")
+    assert "-EncodedCommand" in updated
+    # UTF-16LE base64, which is what -EncodedCommand takes and what a plain
+    # utf-8 encode would silently get wrong.
+    encoded = updated.rsplit(" ", 1)[1]
+    assert base64.b64decode(encoded).decode("utf-16le") == "Get-VM"
+
+
+def test_powershell_mutating_command_is_left_alone(isolated_home, capsys):
+    """A command that changes something stays fully visible, as on Bash."""
+    event = json.dumps({
+        "tool_name": "PowerShell",
+        "tool_input": {"command": "Remove-Item /tmp/x -Force"},
+    })
+
+    assert hook.run_hook(event) == 0
+    assert capsys.readouterr().out.strip() == ""
+
+
+def test_the_new_readers_are_wrapped(isolated_home, capsys):
+    """ssh, pkg and python: the three that carried this session's output."""
+    for command in ("ssh root@host uname -a", "pkg install -y redis",
+                    "python emit.py --check"):
+        event = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+        assert hook.run_hook(event) == 0
+        out = capsys.readouterr().out
+        assert "wn run" in out, f"{command!r} was left unwrapped"
+
+
+def test_every_cmdlet_named_in_a_rule_can_reach_the_wrapper():
+    """A rule that names a cmdlet the hook never wraps is a rule that never
+    runs. The powershell-tables rule listed Get-Volume and Get-Partition while
+    _WRAP admitted neither, so both were written and both were dead.
+    """
+    rules = (pathlib.Path(hook.__file__).parent
+             / "rules_data" / "40-remote.yaml").read_text(encoding="utf-8")
+    alternation = re.search(r"Get-\(([^)]+)\)", rules)
+    assert alternation, "the powershell-tables rule no longer looks as expected"
+
+    for suffix in alternation.group(1).split("|"):
+        assert f"get-{suffix.casefold()}" in hook._WRAP, (
+            f"the rule names Get-{suffix} but the hook will never wrap it")
+
+
+def test_antigravity_runs_are_counted(tmp_path):
+    """Before this label existed, `wn run --client antigravity` recorded
+    nothing: detect_client mapped it to "unknown" and both writers dropped
+    every unknown label without a word. Antigravity has no hook system, so
+    explicit runs are the only numbers it can ever contribute.
+    """
+    collector = efficiency.Collector(tmp_path / "e.sqlite3")
+    collector.record_run("antigravity", raw_tokens=1000, output_tokens=250,
+                         compressed=True, process_ns=1)
+    collector.observe("gemini", selected=True)
+
+    row = collector.snapshot()["antigravity"]
+    collector.close()
+
+    assert row.runs == 1
+    assert row.saved_tokens == 750
+    assert row.observed == 1
+
+
+def test_a_runtime_can_name_itself_through_the_environment(monkeypatch):
+    """No variable identifies Antigravity, and inventing one would have given
+    a label that never matched anything.
+    """
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    assert efficiency.detect_client(env={"WINNOW_CLIENT": "antigravity"}) == "antigravity"
+    # An explicit --client still wins over the environment.
+    assert efficiency.detect_client("codex", env={"WINNOW_CLIENT": "antigravity"}) == "codex"

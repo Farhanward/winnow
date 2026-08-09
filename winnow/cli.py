@@ -7,9 +7,10 @@ import json
 import os
 import subprocess
 import sys
+import time
 from typing import List, Optional
 
-from . import __version__, core, hook
+from . import __version__, core, efficiency, hook
 from . import rules as rules_mod
 from . import semantic, tokens
 from .config import Config
@@ -62,6 +63,7 @@ def cmd_run(args) -> int:
         raw = (raw + "\n" + proc.stderr) if raw else proc.stderr
 
     store = None if args.no_remember else Store()
+    started = time.perf_counter_ns()
     result = core.compress(
         command=command,
         raw=raw,
@@ -70,7 +72,17 @@ def cmd_run(args) -> int:
         exit_code=proc.returncode,
         cwd=os.getcwd(),
     )
-    _print(result.render(footer=not args.no_footer))
+    process_ns = time.perf_counter_ns() - started
+    rendered = result.render(footer=not args.no_footer)
+    client = efficiency.detect_client(getattr(args, "client", None))
+    efficiency.record_run(
+        client,
+        result.raw_tokens,
+        tokens.estimate(rendered),
+        not result.passthrough,
+        process_ns,
+    )
+    _print(rendered)
     if store:
         store.close()
     return proc.returncode
@@ -82,6 +94,7 @@ def cmd_run(args) -> int:
 def cmd_filter(args) -> int:
     raw = sys.stdin.read()
     store = None if args.no_remember else Store()
+    started = time.perf_counter_ns()
     result = core.compress(
         command=args.cmd or "",
         raw=raw,
@@ -89,7 +102,17 @@ def cmd_filter(args) -> int:
         remember=not args.no_remember,
         cwd=os.getcwd(),
     )
-    _print(result.render(footer=not args.no_footer))
+    process_ns = time.perf_counter_ns() - started
+    rendered = result.render(footer=not args.no_footer)
+    client = efficiency.detect_client(getattr(args, "client", None))
+    efficiency.record_run(
+        client,
+        result.raw_tokens,
+        tokens.estimate(rendered),
+        not result.passthrough,
+        process_ns,
+    )
+    _print(rendered)
     if store:
         store.close()
     return 0
@@ -166,6 +189,63 @@ def cmd_gain(args) -> int:
                    f"{rec.raw_tokens:>6}→{rec.comp_tokens:<6}  "
                    f"{rec.filt[:22]:22}  {rec.command[:40]}")
     store.close()
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# efficiency: aggregate-only per-runtime measurements
+# --------------------------------------------------------------------------- #
+def cmd_efficiency(args) -> int:
+    collector = efficiency.Collector()
+    rows = collector.snapshot()
+    collector.close()
+
+    data = {}
+    for client, row in rows.items():
+        if client == "unknown" and not row.runs and not row.observed:
+            continue
+        data[client] = {
+            "observed": row.observed,
+            "auto_selected": row.selected,
+            "runs": row.runs,
+            "compressed": row.compressed,
+            "passthrough": row.passthrough,
+            "tokens_in": row.raw_tokens,
+            "tokens_out": row.output_tokens,
+            "tokens_saved": row.saved_tokens,
+            "reduction_pct": round(row.reduction_pct, 1),
+            "average_process_ms": round(row.average_process_ms, 3),
+            "updated_at": row.updated_at or None,
+        }
+    if args.json:
+        _print(json.dumps(data, indent=2))
+        return 0
+
+    _print("winnow efficiency · aggregate counters only")
+    _print(
+        "runtime     seen/auto   runs  compressed   tokens in→out"
+        "     saved  last update"
+    )
+    for client, row in rows.items():
+        if client == "unknown" and not row.runs and not row.observed:
+            continue
+        last = (
+            time.strftime("%Y-%m-%d", time.localtime(row.updated_at))
+            if row.updated_at else "-"
+        )
+        if not row.runs:
+            _print(
+                f"{client:<11} {row.observed:>4}/{row.selected:<4} "
+                f"{row.runs:>6} {row.compressed:>7}  no data"
+                f"{'':>18} {last}"
+            )
+            continue
+        _print(
+            f"{client:<11} {row.observed:>4}/{row.selected:<4} "
+            f"{row.runs:>6} {row.compressed:>7}  "
+            f"{row.raw_tokens:>8,}→{row.output_tokens:<8,} "
+            f"{row.reduction_pct:>6.1f}%  {last}"
+        )
     return 0
 
 
@@ -305,6 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="do not store the full output for recall")
     r.add_argument("--no-footer", action="store_true",
                    help="suppress the savings/recall footer")
+    r.add_argument("--client", choices=efficiency.CLIENTS,
+                   help="runtime label for aggregate efficiency metrics")
     r.add_argument("rest", nargs=argparse.REMAINDER,
                    help="-- <command and args>")
     r.set_defaults(func=cmd_run)
@@ -314,6 +396,8 @@ def build_parser() -> argparse.ArgumentParser:
                    "(drives which filters/rules apply)")
     f.add_argument("--no-remember", action="store_true")
     f.add_argument("--no-footer", action="store_true")
+    f.add_argument("--client", choices=efficiency.CLIENTS,
+                   help="runtime label for aggregate efficiency metrics")
     f.set_defaults(func=cmd_filter)
 
     rc = sub.add_parser("recall", help="fetch a stored output by handle, or search")
@@ -326,6 +410,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--history", action="store_true", help="list recent outputs")
     g.add_argument("--limit", type=int, default=20)
     g.set_defaults(func=cmd_gain)
+
+    e = sub.add_parser(
+        "efficiency", help="show aggregate efficiency by agent runtime"
+    )
+    e.add_argument("--json", action="store_true")
+    e.set_defaults(func=cmd_efficiency)
 
     d = sub.add_parser("discover", help="find the biggest token sinks seen")
     d.add_argument("--limit", type=int, default=15)
