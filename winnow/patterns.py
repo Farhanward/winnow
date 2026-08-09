@@ -94,3 +94,53 @@ def cascade_guard(text: str, max_occurrences: int = 5) -> Tuple[str, int]:
         else:
             out.append(ln)
     return "\n".join(out), removed
+
+
+# Search results group by file, and the grouping is the whole point: a reader
+# wants to know which files matched and what a match looks like, not to read
+# the two hundredth hit in the same file. The two largest outputs winnow has
+# ever stored were both ripgrep runs, at 76 and 25 million tokens, and neither
+# collapse_repeats nor cascade_guard touches them -- the hits differ in line
+# number and in content, so nothing looks repeated to a fingerprint.
+_GREP_HIT = re.compile(r"^(?P<file>[^\s:][^:]*):(?P<line>\d+):")
+
+
+def limit_per_file(text: str, keep: int = 5) -> tuple[str, int]:
+    """Cap how many hits from the same file survive, keeping the first `keep`.
+
+    Only lines in ripgrep's `path:line:` form are grouped. Anything else --
+    headers, binary-file notices, error text, a summary line -- passes through
+    untouched, because a rule that eats the one line explaining an empty result
+    is worse than no rule.
+    """
+    if keep < 1:
+        return text, 0
+    lines = text.split("\n")
+
+    counts: dict[str, int] = {}
+    for ln in lines:
+        m = _GREP_HIT.match(ln)
+        if m:
+            f = m.group("file")
+            counts[f] = counts.get(f, 0) + 1
+    if not any(c > keep for c in counts.values()):
+        return text, 0
+
+    seen: dict[str, int] = {}
+    out = []
+    removed = 0
+    for ln in lines:
+        m = _GREP_HIT.match(ln)
+        if not m:
+            out.append(ln)
+            continue
+        f = m.group("file")
+        seen[f] = seen.get(f, 0) + 1
+        if seen[f] <= keep:
+            out.append(ln)
+        elif seen[f] == keep + 1:
+            out.append(f"    … ⟨+{counts[f] - keep} more in {f}⟩")
+            removed += 1
+        else:
+            removed += 1
+    return "\n".join(out), removed

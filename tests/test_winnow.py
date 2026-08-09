@@ -398,3 +398,64 @@ def test_a_runtime_can_name_itself_through_the_environment(monkeypatch):
     assert efficiency.detect_client(env={"WINNOW_CLIENT": "gemini"}) == "gemini"
     # An explicit --client still wins over the environment.
     assert efficiency.detect_client("codex", env={"WINNOW_CLIENT": "gemini"}) == "codex"
+
+
+# --------------------------------------------------------------------------- #
+# search results
+# --------------------------------------------------------------------------- #
+def test_search_hits_are_capped_per_file_not_folded_by_similarity():
+    """The two largest outputs winnow ever stored were ripgrep runs, 76 and 25
+    million tokens, and no rule touched them. Hits differ in line number and in
+    content, so collapse_repeats sees nothing repeated. What is wasteful is
+    volume from a few files, which is what this caps.
+    """
+    body = [f"src/server.rs:{i * 3}:    call_{i}(ctx) and then other_{i}()"
+            for i in range(1, 41)]
+    body.append("docs/notes.md:12:  one mention in prose")
+    out, removed = patterns.limit_per_file("\n".join(body), keep=5)
+
+    assert removed == 35
+    kept = [ln for ln in out.split("\n") if ln.startswith("src/server.rs:")]
+    assert len(kept) == 5, "only the first five hits from the busy file survive"
+    # The file that matched once is still there. Losing it would defeat the
+    # point: a reader wants to know *which* files matched.
+    assert "docs/notes.md:12:  one mention in prose" in out
+    assert "+35 more in src/server.rs" in out
+
+
+def test_a_file_under_the_cap_is_untouched():
+    text = "a.rs:1:one\na.rs:2:two\nb.rs:9:three"
+    out, removed = patterns.limit_per_file(text, keep=5)
+    assert removed == 0
+    assert out == text
+
+
+def test_lines_that_are_not_search_hits_always_survive():
+    """A rule that eats the one line explaining an empty result is worse than
+    no rule at all.
+    """
+    text = "\n".join(
+        [f"src/x.rs:{i}:hit {i}" for i in range(1, 30)]
+        + ["Binary file logo.png matches",
+           "rg: ./locked: Permission denied (os error 13)",
+           "no matches found"]
+    )
+    out, _ = patterns.limit_per_file(text, keep=3)
+
+    assert "Binary file logo.png matches" in out
+    assert "rg: ./locked: Permission denied (os error 13)" in out
+    assert "no matches found" in out
+
+
+def test_the_ripgrep_rule_is_wired_to_the_action():
+    """A rule naming an action the engine does not implement is a rule that
+    silently does nothing, which is how the file-list rule would have shipped.
+    """
+    body = [f"src/server.rs:{i}:    unique_call_{i}(a, b) plus tail_{i}"
+            for i in range(1, 40)]
+    out, applied = rules.apply_rules(
+        "rg -n unique_call", "\n".join(body), rules.load_rules(), Config())
+
+    assert "ripgrep" in applied
+    assert "more in src/server.rs" in out
+    assert len(out.split("\n")) < 15
