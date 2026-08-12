@@ -9,6 +9,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Input clamping for Claude Code's `Read` and `Grep`. Their output is assembled
+  inside the agent, where no hook can compress it, so the PreToolUse hook caps
+  the request instead: a `head_limit` on a `Grep` that carries none (80 rows in
+  `content` mode, 200 for the path-listing modes), and a 400-line `limit` on a
+  `Read` of a file over 128 KiB that carries none. A limit the caller wrote is
+  always passed through, including `head_limit: 0` for unlimited. The size test
+  is a `stat` rather than a line count, since the hook runs on every tool call,
+  and a path that cannot be stat'd is left alone. `Glob` takes neither a limit
+  nor a count, so nothing there can be capped without changing the pattern, and
+  it is not matched. Thresholds live in `~/.winnow/config.json`.
+- `inputs_seen` and `inputs_clamped` counters, shown as a `clamped` column in
+  `wn efficiency` and as keys in `wn efficiency --json`. They are kept out of
+  the token and reduction figures: capping a request is not compressing an
+  output. A stats file written before these columns existed is migrated in place
+  and keeps its numbers.
 - Aggregate-only efficiency collection for Codex, Claude Code, and local
   agents, with text and JSON reports through `wn efficiency`.
 - Automatic runtime tags in agent hook rewrites.
@@ -20,6 +35,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `2>&1` blocked wrapping on the PowerShell path. The chain guard rejected any
+  `>`, and a stream merge contains one, so the most common way an agent asks
+  for stderr was never compressed. Both shells now use the same file-redirect
+  rule, which also stopped reading `2>>&1` as a redirect to a file named `>&1`.
+  Redirection that lands in a file still bails.
+- A leading `cd` hid the real command from the eligibility check. The first
+  token of `cd C:\X; cargo test` is `cd`, which is in no wrap set, so the
+  dominant command shape on Windows was skipped on both shells. Eligibility is
+  now read from the segment after a leading directory change, joined by `;` or
+  `&&`. The `cd` is not stripped and the whole line still runs as one unit. The
+  mutating guard and the file-redirect guard still read the whole line, so
+  `cd X; rm -rf y` stays visible, and a line that cannot be split confidently is
+  left alone.
+- `wn hook install` wrote only the first matcher into settings.json, so the
+  PowerShell matcher never arrived through it even though the README said it
+  did. It now merges every matcher the snippet carries, skipping ones already
+  present.
 - The PreToolUse hook skipped every command containing a shell metacharacter on
   the non-PowerShell path, so agents that pipe by habit (`… | tail -25`) were
   never wrapped. On one measured Claude Code install this left 775 of 778
