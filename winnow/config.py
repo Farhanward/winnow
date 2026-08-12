@@ -50,6 +50,30 @@ class Config:
     # Cap the recall store at this many rows (oldest pruned first).
     max_store_rows: int = 5000
 
+    # --- input clamping (the PreToolUse hook on Read and Grep) ------------- #
+    # These caps do not compress anything. They cap what the agent asks for,
+    # which is the only lever a PreToolUse hook has over a tool whose output
+    # never leaves the agent. Set any of them to 0 to turn that clamp off.
+    #
+    # Grep, content mode: a row is a whole matched source line plus a
+    # ``path:line:`` prefix, and -A/-B/-C multiply it, so a content row costs
+    # several times what a path row costs. The tool's own default is 250 rows;
+    # 80 is enough to read the shape of the matches and pick the next query.
+    grep_head_limit_content: int = 80
+    # Grep, files_with_matches and count: one short path (or one count) per
+    # row, so rows are cheap and the cap can be loose. Still under the tool's
+    # 250, because a pattern with more than 200 matching files is a pattern to
+    # narrow rather than a list to read.
+    grep_head_limit_paths: int = 200
+    # Read: the tool already stops at 2000 lines, so a clamp only earns its
+    # keep on files longer than that. At roughly 60 bytes a line, 2000 lines is
+    # about 120 KB, so 128 KiB is a cheap size proxy for "longer than the tool
+    # would return anyway". Smaller files are left alone.
+    read_large_file_bytes: int = 131_072
+    # Lines to request from a file over that threshold. One screenful of
+    # orientation; a follow-up Read with an explicit offset gets the rest.
+    read_clamp_lines: int = 400
+
     @classmethod
     def load(cls) -> "Config":
         cfg = cls()
