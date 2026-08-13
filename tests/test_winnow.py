@@ -260,6 +260,20 @@ def test_hook_skips_redirection_to_file():
     assert hook._wrapped("cat x > y") is None
 
 
+def test_a_redirect_target_that_starts_with_a_digit_is_still_a_redirect():
+    """The digit that marks a stream sits before the operator, as in ``1>&2``.
+    A digit after it belongs to the target and the target is an ordinary file.
+    Reading those as stream merges sent the commands through the compressor
+    with every byte already on its way to disk.
+    """
+    for cmd in ("cargo tree > 1.log", "cargo tree >2026.txt", "cargo tree 2> e.txt"):
+        assert hook._wrapped(cmd) is None, cmd
+        assert hook._wrapped(cmd, powershell=True) is None, cmd
+    # The merges this guard exists for are untouched by the narrower rule.
+    for cmd in ("cargo test 2>&1", "cargo test *>&1", "cargo test 1>&2"):
+        assert hook._wrapped(cmd, powershell=True) is not None, cmd
+
+
 def test_hook_still_skips_unwrappable_first_tokens_in_pipelines():
     assert hook._wrapped("ffprobe movie.mp4 | head -5") is None
 
@@ -277,6 +291,88 @@ def test_powershell_path_is_unaffected_by_sh_wrapping():
     assert "-EncodedCommand" in out
     # Chains stay unwrapped on the PowerShell path, as before.
     assert hook._wrapped("rg -n TODO . > out.txt", powershell=True) is None
+
+
+def test_a_stream_merge_is_not_a_file_redirect_on_powershell():
+    """``2>&1`` was read as redirection and killed the wrap. The bytes come
+    back to the agent, so there is everything to compress. Bash already had
+    this right, and both shells now go through the one rule.
+    """
+    merged = "cargo test 2>&1 | Select-String error"
+    out = hook._wrapped(merged, powershell=True)
+    assert out is not None
+    assert base64.b64decode(out.rsplit(" ", 1)[-1]).decode("utf-16le") == merged
+    for variant in ("cargo test 2>&1", "cargo test *>&1", "cargo test 2>>&1"):
+        assert hook._wrapped(variant, powershell=True) is not None, variant
+    # A redirect that lands in a file still bails: those bytes go to disk.
+    assert hook._wrapped("cargo test 2>&1 > out.txt", powershell=True) is None
+
+
+def test_a_leading_directory_change_no_longer_hides_the_real_command():
+    """``shlex.split(cmd)[0]`` returned ``cd``, which is in no wrap set, so the
+    dominant shape on Windows was skipped on both shells.
+    """
+    ps = "cd C:\\X; cargo test"
+    out = hook._wrapped(ps, powershell=True)
+    # The cd is not stripped. The whole line runs as one unit, so the directory
+    # change still happens before the command that needs it.
+    assert base64.b64decode(out.rsplit(" ", 1)[-1]).decode("utf-16le") == ps
+
+    assert hook._wrapped("cd /c/X && cargo test") == (
+        "wn run -- sh -c 'cd /c/X && cargo test'"
+    )
+    assert hook._wrapped("cd C:\\X; cargo test 2>&1 | Select-String e",
+                         powershell=True) is not None
+    for shape in ("cd X; cargo test", "cd X;cargo test",
+                  "Set-Location X; cargo test", "pushd X; cargo test"):
+        assert hook._wrapped(shape, powershell=True) is not None, shape
+
+
+def test_the_guards_still_read_the_whole_line_not_just_the_segment():
+    """Eligibility is decided from the segment after the cd. Everything that
+    keeps a command visible is still decided from all of it.
+    """
+    assert hook._wrapped("cd X; rm -rf y") is None
+    assert hook._wrapped("cd X; rm -rf y", powershell=True) is None
+    assert hook._wrapped("cd X; Remove-Item y -Force", powershell=True) is None
+    assert hook._wrapped("cd X; cargo tree > out.txt") is None
+    assert hook._wrapped("cd X; cargo tree > out.txt", powershell=True) is None
+    # A second chain past the cd is still a chain on PowerShell.
+    assert hook._wrapped("cd X; cargo test; npm test", powershell=True) is None
+    # And an ineligible command is still ineligible wherever it sits.
+    assert hook._wrapped("cd X; ffprobe movie.mp4") is None
+
+
+def test_a_line_that_cannot_be_split_confidently_is_left_alone():
+    """A path holding a ``;`` must not desync the segment split, and an
+    unbalanced quote is a line to leave alone rather than guess at.
+    """
+    quoted = 'cd "C:\\a;b" ; cargo test'
+    assert hook._wrapped(quoted, powershell=True) is not None
+    # The quoted ';' is part of the path, not a join, so nothing reads the
+    # fragment after it as a command.
+    assert hook._wrapped('cd "C:\\a;rm -rf y" ; cargo test') is None
+    assert hook._wrapped('cargo test "unbalanced') is None
+    assert hook._wrapped("cd X | cargo test", powershell=True) is None
+    assert hook._wrapped("cd X", powershell=True) is None
+
+
+def test_the_probe_shapes_survive_the_full_hook(isolated_home, capsys):
+    """The six shapes measured against the live counters, end to end."""
+    wrapped = {
+        ("PowerShell", "cargo test"): True,
+        ("PowerShell", "cd C:\\X; cargo test"): True,
+        ("PowerShell", "cargo test 2>&1 | Select-String e"): True,
+        ("PowerShell", "cd C:\\X; cargo test 2>&1 | Select-String e"): True,
+        ("Bash", "cd /c/X && cargo test"): True,
+        ("Bash", "cargo test | head -20"): True,
+        ("Bash", "cd /c/X && rm -rf build"): False,
+    }
+    for (tool, command), expected in wrapped.items():
+        event = json.dumps({"tool_name": tool, "tool_input": {"command": command}})
+        assert hook.run_hook(event) == 0
+        out = capsys.readouterr().out
+        assert bool(out.strip()) is expected, f"{tool}: {command}"
 
 
 def test_hook_keeps_mutating_powershell_commands_unwrapped():
@@ -362,6 +458,191 @@ def test_every_cmdlet_named_in_a_rule_can_reach_the_wrapper():
             f"the rule names Get-{suffix} but the hook will never wrap it")
 
 
+# --------------------------------------------------------------------------- #
+# input clamping: Read and Grep
+# --------------------------------------------------------------------------- #
+def _decision(capsys, tool_name, tool_input):
+    """Run the hook on one event and return its updatedInput, or None."""
+    event = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+    assert hook.run_hook(event) == 0
+    out = capsys.readouterr().out.strip()
+    if not out:
+        return None
+    return json.loads(out)["hookSpecificOutput"]["updatedInput"]
+
+
+def _big_file(tmp_path, name="big.txt"):
+    """A file comfortably over the size threshold, without counting lines."""
+    path = tmp_path / name
+    path.write_text(("x" * 100 + "\n") * 2000, encoding="utf-8")
+    assert path.stat().st_size > Config().read_large_file_bytes
+    return path
+
+
+def test_grep_without_a_head_limit_gets_one_per_output_mode(
+    isolated_home, capsys
+):
+    """Content rows carry a whole source line each, path rows carry a path, so
+    the two modes are not worth the same cap.
+    """
+    cfg = Config()
+    content = _decision(capsys, "Grep", {
+        "pattern": "TODO", "output_mode": "content"})
+    assert content["head_limit"] == cfg.grep_head_limit_content
+
+    for mode in ("files_with_matches", "count"):
+        paths = _decision(capsys, "Grep", {"pattern": "TODO", "output_mode": mode})
+        assert paths["head_limit"] == cfg.grep_head_limit_paths, mode
+
+    # The tool's own default when output_mode is omitted is files_with_matches.
+    default = _decision(capsys, "Grep", {"pattern": "TODO"})
+    assert default["head_limit"] == cfg.grep_head_limit_paths
+    assert cfg.grep_head_limit_content < cfg.grep_head_limit_paths
+
+
+def test_an_explicit_head_limit_is_never_second_guessed(isolated_home, capsys):
+    """Including 0, which the tool reads as unlimited. A caller who typed a
+    number has already made this decision.
+    """
+    for limit in (5, 250, 4000, 0):
+        assert _decision(capsys, "Grep", {
+            "pattern": "TODO", "output_mode": "content", "head_limit": limit,
+        }) is None, limit
+
+
+def test_a_read_is_clamped_only_when_the_file_is_actually_large(
+    isolated_home, tmp_path, capsys
+):
+    """Read already stops at 2000 lines, so clamping a short file would cost a
+    complete read and save nothing.
+    """
+    big = _big_file(tmp_path)
+    small = tmp_path / "small.txt"
+    small.write_text("hello\n", encoding="utf-8")
+
+    clamped = _decision(capsys, "Read", {"file_path": str(big)})
+    assert clamped["limit"] == Config().read_clamp_lines
+    assert _decision(capsys, "Read", {"file_path": str(small)}) is None
+
+
+def test_a_read_with_its_own_limit_is_left_alone(
+    isolated_home, tmp_path, capsys
+):
+    big = _big_file(tmp_path)
+    assert _decision(capsys, "Read", {
+        "file_path": str(big), "limit": 1500}) is None
+
+
+def test_a_read_of_an_unreadable_path_emits_nothing_and_does_not_raise(
+    isolated_home, tmp_path, capsys
+):
+    """A stat that fails must never turn into a failed tool call."""
+    for target in (str(tmp_path / "nope.txt"), str(tmp_path), "", None):
+        assert _decision(capsys, "Read", {"file_path": target}) is None, target
+    assert _decision(capsys, "Read", {}) is None
+
+
+def test_the_clamped_input_carries_every_original_parameter(
+    isolated_home, tmp_path, capsys
+):
+    """updatedInput replaces the input rather than patching it, so anything
+    left out is dropped. For Grep that means losing the pattern.
+    """
+    grep_input = {
+        "pattern": r"def \w+", "path": "winnow", "output_mode": "content",
+        "-n": True, "-C": 2, "glob": "*.py", "multiline": False,
+    }
+    updated = _decision(capsys, "Grep", dict(grep_input))
+    assert set(updated) == set(grep_input) | {"head_limit"}
+    assert all(updated[k] == v for k, v in grep_input.items())
+
+    read_input = {"file_path": str(_big_file(tmp_path)), "offset": 900}
+    updated = _decision(capsys, "Read", dict(read_input))
+    assert set(updated) == set(read_input) | {"limit"}
+    # offset says where to start reading, not how much to read.
+    assert updated["offset"] == 900
+
+
+def test_a_hand_edited_config_value_disables_the_clamp_instead_of_raising(
+    isolated_home, tmp_path, capsys
+):
+    """Config.load assigns whatever config.json holds without checking its
+    type. README says 0 turns a clamp off, so null is a reasonable guess for a
+    reader who wants the same, and it used to reach int() and raise on every
+    Read and Grep the agent made.
+    """
+    home = pathlib.Path(os.environ["WINNOW_HOME"])
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps({"grep_head_limit_content": None, "read_clamp_lines": "lots"}),
+        encoding="utf-8",
+    )
+    assert _decision(capsys, "Grep", {
+        "pattern": "TODO", "output_mode": "content"}) is None
+    assert _decision(capsys, "Read", {"file_path": str(_big_file(tmp_path))}) is None
+    # A key left alone still clamps: one bad value is not a broken config.
+    assert _decision(capsys, "Grep", {"pattern": "TODO"})["head_limit"] == (
+        Config().grep_head_limit_paths
+    )
+
+
+def test_glob_is_left_alone_because_there_is_nothing_to_clamp(
+    isolated_home, capsys
+):
+    """Glob takes a pattern and a path and no limit of any kind, so the only
+    way to shrink its result is to change what was asked for.
+    """
+    assert _decision(capsys, "Glob", {"pattern": "**/*.py"}) is None
+    assert "Glob" not in hook._CLAMP_TOOLS
+
+
+def test_clamps_are_counted_apart_from_compression(
+    isolated_home, tmp_path, capsys, monkeypatch
+):
+    """A clamp caps a request; it never compresses an output. Counting it in
+    the compression columns would publish a ratio Winnow never achieved.
+    """
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    _decision(capsys, "Grep", {"pattern": "TODO"})
+    _decision(capsys, "Grep", {"pattern": "TODO", "head_limit": 9})
+    _decision(capsys, "Read", {"file_path": str(_big_file(tmp_path))})
+
+    collector = efficiency.Collector()
+    row = collector.snapshot()["claude"]
+    collector.close()
+
+    assert row.inputs_seen == 3
+    assert row.inputs_clamped == 2
+    assert row.clamp_pct == pytest.approx(66.67, abs=0.01)
+    # None of it leaked into the shell or compression counters.
+    assert (row.observed, row.selected, row.runs, row.raw_tokens) == (0, 0, 0, 0)
+    assert row.reduction_pct == 0.0
+
+
+def test_the_hook_snippet_covers_the_tools_it_can_act_on(isolated_home):
+    matchers = [
+        entry["matcher"]
+        for entry in hook.settings_snippet()["hooks"]["PreToolUse"]
+    ]
+    assert matchers == ["Bash", "PowerShell", "Read", "Grep"]
+    # Glob has no matcher because the hook would have nothing to do in it.
+    assert "Glob" not in matchers
+
+
+def test_install_writes_every_matcher_and_stays_idempotent(tmp_path, capsys):
+    """It appended entry [0] and stopped, so the PowerShell matcher never
+    reached settings.json through it, and Read and Grep would not have either.
+    """
+    settings = tmp_path / "settings.json"
+    assert cli._hook_install(str(settings)) == 0
+    assert cli._hook_install(str(settings)) == 0
+    capsys.readouterr()
+
+    pre = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    assert [entry["matcher"] for entry in pre] == [
+        "Bash", "PowerShell", "Read", "Grep"]
+
+
 def test_gemini_runs_are_counted(tmp_path):
     """Before this label existed, `wn run --client gemini` recorded nothing:
     detect_client mapped it to "unknown" and both writers dropped every unknown
@@ -398,3 +679,64 @@ def test_a_runtime_can_name_itself_through_the_environment(monkeypatch):
     assert efficiency.detect_client(env={"WINNOW_CLIENT": "gemini"}) == "gemini"
     # An explicit --client still wins over the environment.
     assert efficiency.detect_client("codex", env={"WINNOW_CLIENT": "gemini"}) == "codex"
+
+
+# --------------------------------------------------------------------------- #
+# search results
+# --------------------------------------------------------------------------- #
+def test_search_hits_are_capped_per_file_not_folded_by_similarity():
+    """The two largest outputs winnow ever stored were ripgrep runs, 76 and 25
+    million tokens, and no rule touched them. Hits differ in line number and in
+    content, so collapse_repeats sees nothing repeated. What is wasteful is
+    volume from a few files, which is what this caps.
+    """
+    body = [f"src/server.rs:{i * 3}:    call_{i}(ctx) and then other_{i}()"
+            for i in range(1, 41)]
+    body.append("docs/notes.md:12:  one mention in prose")
+    out, removed = patterns.limit_per_file("\n".join(body), keep=5)
+
+    assert removed == 35
+    kept = [ln for ln in out.split("\n") if ln.startswith("src/server.rs:")]
+    assert len(kept) == 5, "only the first five hits from the busy file survive"
+    # The file that matched once is still there. Losing it would defeat the
+    # point: a reader wants to know *which* files matched.
+    assert "docs/notes.md:12:  one mention in prose" in out
+    assert "+35 more in src/server.rs" in out
+
+
+def test_a_file_under_the_cap_is_untouched():
+    text = "a.rs:1:one\na.rs:2:two\nb.rs:9:three"
+    out, removed = patterns.limit_per_file(text, keep=5)
+    assert removed == 0
+    assert out == text
+
+
+def test_lines_that_are_not_search_hits_always_survive():
+    """A rule that eats the one line explaining an empty result is worse than
+    no rule at all.
+    """
+    text = "\n".join(
+        [f"src/x.rs:{i}:hit {i}" for i in range(1, 30)]
+        + ["Binary file logo.png matches",
+           "rg: ./locked: Permission denied (os error 13)",
+           "no matches found"]
+    )
+    out, _ = patterns.limit_per_file(text, keep=3)
+
+    assert "Binary file logo.png matches" in out
+    assert "rg: ./locked: Permission denied (os error 13)" in out
+    assert "no matches found" in out
+
+
+def test_the_ripgrep_rule_is_wired_to_the_action():
+    """A rule naming an action the engine does not implement is a rule that
+    silently does nothing, which is how the file-list rule would have shipped.
+    """
+    body = [f"src/server.rs:{i}:    unique_call_{i}(a, b) plus tail_{i}"
+            for i in range(1, 40)]
+    out, applied = rules.apply_rules(
+        "rg -n unique_call", "\n".join(body), rules.load_rules(), Config())
+
+    assert "ripgrep" in applied
+    assert "more in src/server.rs" in out
+    assert len(out.split("\n")) < 15

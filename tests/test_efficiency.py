@@ -160,6 +160,81 @@ def test_run_records_passthrough_even_with_no_remember(
     assert row.raw_tokens == row.output_tokens
 
 
+def test_a_stats_file_from_an_older_winnow_still_loads(isolated_home, tmp_path):
+    """The input-clamp columns were added after 0.1.1. A database written
+    before them has to keep its numbers and start the new ones at zero.
+    """
+    path = tmp_path / "old.db"
+    db = sqlite3.connect(str(path))
+    db.execute(
+        """
+        CREATE TABLE runtime_efficiency (
+            client        TEXT PRIMARY KEY,
+            observed      INTEGER NOT NULL DEFAULT 0,
+            selected      INTEGER NOT NULL DEFAULT 0,
+            runs          INTEGER NOT NULL DEFAULT 0,
+            compressed    INTEGER NOT NULL DEFAULT 0,
+            passthrough   INTEGER NOT NULL DEFAULT 0,
+            raw_tokens    INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            process_ns    INTEGER NOT NULL DEFAULT 0,
+            updated_at    REAL NOT NULL DEFAULT 0
+        )
+        """
+    )
+    db.execute(
+        "INSERT INTO runtime_efficiency (client, runs, raw_tokens, "
+        "output_tokens, updated_at) VALUES ('codex', 7, 900, 300, 5.0)"
+    )
+    db.commit()
+    db.close()
+
+    collector = efficiency.Collector(path)
+    collector.observe_input("codex", clamped=True)
+    row = collector.snapshot()["codex"]
+    collector.close()
+
+    assert row.runs == 7
+    assert row.saved_tokens == 600
+    assert row.inputs_seen == 1
+    assert row.inputs_clamped == 1
+
+
+def test_input_clamps_accumulate_without_touching_run_counters(isolated_home):
+    collector = efficiency.Collector()
+    collector.observe_input("claude", clamped=True)
+    collector.observe_input("claude", clamped=False)
+    collector.observe_input("claude", clamped=False)
+    collector.record_run("claude", 100, 40, True, 1_000_000)
+    row = collector.snapshot()["claude"]
+    collector.close()
+
+    assert row.inputs_seen == 3
+    assert row.inputs_clamped == 1
+    assert row.observed == 0
+    assert row.runs == 1
+    assert row.reduction_pct == 60.0
+
+
+def test_efficiency_report_keeps_clamps_out_of_the_compression_ratio(
+    isolated_home, capsys
+):
+    collector = efficiency.Collector()
+    collector.record_run("codex", 100, 20, True, 1_000_000)
+    for _ in range(4):
+        collector.observe_input("codex", clamped=True)
+    collector.close()
+
+    assert cli.cmd_efficiency(Namespace(json=True)) == 0
+    data = json.loads(capsys.readouterr().out)["codex"]
+    assert data["inputs_seen"] == 4
+    assert data["inputs_clamped"] == 4
+    assert data["inputs_clamped_pct"] == 100.0
+    # The published ratio still describes compressed output only.
+    assert data["reduction_pct"] == 80.0
+    assert data["tokens_in"] == 100
+
+
 def test_efficiency_command_reports_all_three_clients(isolated_home, capsys):
     collector = efficiency.Collector()
     collector.record_run("codex", 100, 20, True, 1_000_000)

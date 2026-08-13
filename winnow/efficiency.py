@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Dict, Mapping, Optional
 
@@ -81,6 +81,12 @@ class Snapshot:
     output_tokens: int = 0
     process_ns: int = 0
     updated_at: float = 0.0
+    # Read/Grep calls the hook inspected, and how many of those it clamped.
+    # Deliberately kept out of every token figure below: clamping caps what a
+    # tool is asked for, it does not compress anything, and folding the two
+    # together would report a compression ratio Winnow never achieved.
+    inputs_seen: int = 0
+    inputs_clamped: int = 0
 
     @property
     def saved_tokens(self) -> int:
@@ -103,6 +109,12 @@ class Snapshot:
         if not self.runs:
             return 0.0
         return self.process_ns / self.runs / 1_000_000
+
+    @property
+    def clamp_pct(self) -> float:
+        if not self.inputs_seen:
+            return 0.0
+        return self.inputs_clamped / self.inputs_seen * 100
 
 
 class Collector:
@@ -128,11 +140,32 @@ class Collector:
                 raw_tokens    INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 process_ns    INTEGER NOT NULL DEFAULT 0,
-                updated_at    REAL NOT NULL DEFAULT 0
+                updated_at    REAL NOT NULL DEFAULT 0,
+                inputs_seen   INTEGER NOT NULL DEFAULT 0,
+                inputs_clamped INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+        self._add_missing_columns()
         self.conn.commit()
+
+    def _add_missing_columns(self) -> None:
+        """Bring a database written by an older Winnow up to the current shape.
+
+        Counters are only ever appended, so a file from a previous version
+        still loads: the columns it lacks are added in place and start at the
+        zero they would have held all along.
+        """
+        have = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(runtime_efficiency)")
+        }
+        for name in ("inputs_seen", "inputs_clamped"):
+            if name not in have:
+                self.conn.execute(
+                    "ALTER TABLE runtime_efficiency "
+                    f"ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0"
+                )
 
     def observe(self, client: str, selected: bool) -> None:
         label = detect_client(client)
@@ -150,6 +183,32 @@ class Collector:
                 updated_at = excluded.updated_at
             """,
             (label, int(selected), now),
+        )
+        self.conn.commit()
+
+    def observe_input(self, client: str, clamped: bool) -> None:
+        """Count one Read/Grep call the hook inspected, and whether it capped it.
+
+        Kept in its own pair of columns rather than added to ``observed`` and
+        ``selected``: those describe shell commands the hook can route through
+        the compressor, and these describe tool inputs it can only make
+        smaller. Mixing them would make both numbers mean less.
+        """
+        label = detect_client(client)
+        if label not in CLIENTS:
+            return
+        now = time.time()
+        self.conn.execute(
+            """
+            INSERT INTO runtime_efficiency
+                (client, inputs_seen, inputs_clamped, updated_at)
+            VALUES (?, 1, ?, ?)
+            ON CONFLICT(client) DO UPDATE SET
+                inputs_seen = inputs_seen + 1,
+                inputs_clamped = inputs_clamped + excluded.inputs_clamped,
+                updated_at = excluded.updated_at
+            """,
+            (label, int(clamped), now),
         )
         self.conn.commit()
 
@@ -194,8 +253,13 @@ class Collector:
         self.conn.commit()
 
     def snapshot(self) -> Dict[str, Snapshot]:
+        known = {f.name for f in fields(Snapshot)}
         rows = {
-            row["client"]: Snapshot(**dict(row))
+            row["client"]: Snapshot(
+                # Ignore columns this version does not know about, so a file
+                # written by a newer Winnow still reads here.
+                **{k: v for k, v in dict(row).items() if k in known}
+            )
             for row in self.conn.execute(
                 "SELECT * FROM runtime_efficiency ORDER BY client"
             )
@@ -211,6 +275,16 @@ def observe(client: str, selected: bool) -> None:
     try:
         collector = Collector()
         collector.observe(client, selected)
+        collector.close()
+    except (OSError, sqlite3.Error):
+        pass
+
+
+def observe_input(client: str, clamped: bool) -> None:
+    """Best-effort input observation; metrics must never disrupt a tool call."""
+    try:
+        collector = Collector()
+        collector.observe_input(client, clamped)
         collector.close()
     except (OSError, sqlite3.Error):
         pass

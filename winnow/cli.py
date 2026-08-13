@@ -207,6 +207,12 @@ def cmd_efficiency(args) -> int:
         data[client] = {
             "observed": row.observed,
             "auto_selected": row.selected,
+            # Read/Grep inputs the hook capped. Reported next to the
+            # compression figures, never inside them: a clamp caps a request,
+            # it does not compress an output.
+            "inputs_seen": row.inputs_seen,
+            "inputs_clamped": row.inputs_clamped,
+            "inputs_clamped_pct": round(row.clamp_pct, 1),
             "runs": row.runs,
             "compressed": row.compressed,
             "passthrough": row.passthrough,
@@ -224,7 +230,7 @@ def cmd_efficiency(args) -> int:
     _print("winnow efficiency · aggregate counters only")
     _print(
         "runtime     seen/auto   runs  compressed   tokens in→out"
-        "     saved  last update"
+        "     saved  clamped  last update"
     )
     for client, row in rows.items():
         if client == "unknown" and not row.runs and not row.observed:
@@ -233,18 +239,19 @@ def cmd_efficiency(args) -> int:
             time.strftime("%Y-%m-%d", time.localtime(row.updated_at))
             if row.updated_at else "-"
         )
+        clamped = f"{row.inputs_clamped:>4}/{row.inputs_seen:<4}"
         if not row.runs:
             _print(
                 f"{client:<11} {row.observed:>4}/{row.selected:<4} "
                 f"{row.runs:>6} {row.compressed:>7}  no data"
-                f"{'':>18} {last}"
+                f"{'':>18} {clamped} {last}"
             )
             continue
         _print(
             f"{client:<11} {row.observed:>4}/{row.selected:<4} "
             f"{row.runs:>6} {row.compressed:>7}  "
             f"{row.raw_tokens:>8,}→{row.output_tokens:<8,} "
-            f"{row.reduction_pct:>6.1f}%  {last}"
+            f"{row.reduction_pct:>6.1f}%  {clamped} {last}"
         )
     return 0
 
@@ -357,9 +364,12 @@ def _hook_install(settings_path: Optional[str]) -> int:
             data = {}
     hooks = data.setdefault("hooks", {})
     pre = hooks.setdefault("PreToolUse", [])
-    if not any(json.dumps(e) == json.dumps(snippet["hooks"]["PreToolUse"][0])
-               for e in pre):
-        pre.append(snippet["hooks"]["PreToolUse"][0])
+    # Every matcher, not just the first one. Installing entry [0] alone left
+    # the PowerShell matcher out of the settings file the whole time the README
+    # said it went in, and it would now leave out Read and Grep as well.
+    for entry in snippet["hooks"]["PreToolUse"]:
+        if not any(json.dumps(e) == json.dumps(entry) for e in pre):
+            pre.append(entry)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2))
     _print(f"winnow: hook installed to {path}")

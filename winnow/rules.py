@@ -133,6 +133,12 @@ def _run_action(key: str, val: Any, text: str, cfg, stats: Dict[str, int]) -> st
         stats["dropped"] += removed
         return new
 
+    if key == "limit_per_file" and val:
+        keep = val if isinstance(val, int) and val > 0 else 5
+        new, removed = patterns.limit_per_file(text, keep)
+        stats["dropped"] += removed
+        return new
+
     if key == "cascade_guard" and val:
         limit = val if isinstance(val, int) and val > 0 else 5
         new, removed = patterns.cascade_guard(text, limit)
