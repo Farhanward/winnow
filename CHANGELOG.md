@@ -51,7 +51,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `wn hook install` wrote only the first matcher into settings.json, so the
   PowerShell matcher never arrived through it even though the README said it
   did. It now merges every matcher the snippet carries, skipping ones already
-  present.
+  present. Anyone who installed through the CLI before this has Bash coverage
+  only and should run `wn hook install` again.
+- A redirect target beginning with a digit was read as a stream merge. The
+  file-redirect pattern excluded a digit after the operator, so `> 1.log` and
+  `>2026.txt` looked like `>&1` and their commands were wrapped with every byte
+  already on its way to disk. The digit that marks a stream sits before the
+  operator, as in `1>&2`, and that case was already covered.
+- A non-numeric value in `config.json` raised on every `Read` and `Grep`.
+  `Config.load` assigns what it finds without checking the type, so a `null`
+  written by someone following the README's note that `0` disables a clamp
+  reached `int()` and failed the tool call it was meant to shrink. A value that
+  cannot be read now turns off its own clamp and leaves the others working.
 - The PreToolUse hook skipped every command containing a shell metacharacter on
   the non-PowerShell path, so agents that pipe by habit (`… | tail -25`) were
   never wrapped. On one measured Claude Code install this left 775 of 778

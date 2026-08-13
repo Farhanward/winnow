@@ -163,11 +163,11 @@ hook can still do is cap the request, which caps the cost at the source.
   line plus its `path:line:` prefix, and `-A`/`-B`/`-C` multiply it, so it costs
   several times what a bare path row costs. A `head_limit` the caller wrote is
   passed through untouched, including an explicit `0` for unlimited.
-- **Read** of a file over 128 KiB with no `limit` gets one of 400 lines. The tool
-  already stops at 2000 lines, so a clamp only earns its keep past that. The
-  check is a `stat`, not a line count, because this runs on every `Read` the
-  agent makes. `offset` is never moved, and a missing or unreadable path is left
-  alone rather than failing the call.
+- **Read** of a file of 128 KiB or more with no `limit` gets one of 400 lines.
+  The tool already stops at 2000 lines, so a clamp only earns its keep past
+  that. The check is a `stat`, not a line count, because this runs on every
+  `Read` the agent makes. `offset` is never moved, and a missing or unreadable
+  path is left alone rather than failing the call.
 - **Glob** is untouched. Its schema is `pattern` and `path` and nothing else: no
   limit, no head, no count. The only way to make it return less is to rewrite
   the pattern, which changes what was asked for rather than how much of it comes
@@ -175,7 +175,8 @@ hook can still do is cap the request, which caps the cost at the source.
 
 All four numbers live in `~/.winnow/config.json` as `grep_head_limit_content`,
 `grep_head_limit_paths`, `read_large_file_bytes` and `read_clamp_lines`. Setting
-any of them to `0` turns that clamp off.
+any of them to `0` turns that clamp off. A value that is not a number turns its
+clamp off too, rather than failing the tool call it was meant to shrink.
 
 This is a cap, not compression. Nothing is filtered, collapsed, or stored, and
 the truncated remainder is not recoverable through `wn recall`. A follow-up
@@ -203,8 +204,9 @@ refuse them, which cost most of the wrapping on a Windows workstation.
 
 These stay unwrapped by design:
 
-- Redirection to a file (`> out`, `>> log`, `*> all`). Those bytes go to disk,
-  so there is nothing to compress.
+- Redirection to a file (`> out`, `>> log`, `*> all`), including a target that
+  opens with a digit, like `> 1.log`. Those bytes go to disk, so there is
+  nothing to compress.
 - Any command whose deciding token is outside the known read-heavy set.
 - Any line matching the mutating-command guard. Both guards read the whole
   line, not the segment eligibility came from, so `cd X; rm -rf y` stays fully
@@ -227,27 +229,39 @@ A real table, from the machine this was developed on:
 
 ```
 runtime     seen/auto   runs  compressed   tokens in→out     saved  clamped  last update
-codex          2/2       925      47  108,632,511→21,333,619   80.4%     0/0  2026-08-03
-claude      1647/34       34       6   108,389→41,630     61.6%     0/0  2026-08-06
-gemini         0/0         0       0  no data                         0/0  -
-local        202/20       20       0    30,682→30,682      0.0%     0/0  2026-07-25
+codex          2/2       939      47  108,650,822→21,351,930   80.3%     0/0    2026-08-11
+claude      2994/404     394      28   232,653→135,393    41.8%     9/183  2026-08-13
+gemini         0/0         0       0  no data                      0/0    -
+local        202/20       20       0    30,682→30,682      0.0%     0/0    2026-07-25
 ```
 
-Read the columns before reading the percentages. `seen/auto` is the honest one:
-Claude Code's hook inspected 1,647 calls and selected 34. That ratio is the
-conservative guard working as designed, not a failure, but it is also the reason
-Claude's absolute saving is small next to Codex's. `codex` shows the opposite
-shape, two observations against 925 runs, because those runs arrived through an
-explicit `wn run` rather than through a hook.
+Read the columns before reading the percentages. `seen/auto` is the honest one,
+and Claude's covers two eras. Before the wrapping gaps were closed it stood at
+213 selected out of 2,550 inspected, or 8.4%. Since then it is 191 out of 444,
+or 43%. The cumulative 404/2,994 above averages the two eras into 13.5% and so
+understates the fix threefold. `codex` shows the opposite shape, two
+observations against 939 runs, because those runs arrived through an explicit
+`wn run` rather than a hook.
+
+Claude's `saved` fell from 61.6% to 41.8% across the same change, which is
+coverage widening rather than compression weakening. The commands the fix
+brought in are mostly short: a `git status`, a `cd X; cargo test` that prints a
+few lines. They dilute the mean and add almost nothing to the total, while the
+absolute saving keeps climbing. Wrapping an output with nothing to compress
+costs about one token; measured against the same argv run bare, a passthrough
+lands within 1% either way.
 
 `gemini` reads `no data` here because the label is new. An unused runtime
 stays that way indefinitely and never blocks collection for the others.
 
 `clamped` counts `Read` and `Grep` calls the hook capped against the calls it
-inspected. It reads `0/0` above because this table was recorded before the
-counter existed. It is reported next to the token columns and never inside them:
-a clamp caps a request, so counting it as compression would publish a reduction
-Winnow never performed.
+inspected. It is reported next to the token columns and never inside them: a
+clamp caps a request, so counting it as compression would publish a reduction
+Winnow never performed. What it saves is measurable on its own terms. A `Read`
+of a file past the threshold returns 400 lines where the tool would have
+returned 2,000, which on a real file in this repository is 4,358 tokens instead
+of 22,282. A content-mode `Grep` returning 80 rows instead of the tool's 250
+was 1,628 tokens instead of 4,039 on a real search.
 
 The collector is event-driven, so no background service runs. It stores only
 integer counters and a last-updated timestamp in `~/.winnow/efficiency.db`:
