@@ -50,7 +50,12 @@ _META = set("|&;<>`$(){}")
 # Both shells are held to this one rule. PowerShell used to bail on any ``>``
 # at all, which caught ``2>&1`` along with it and left the most common way an
 # agent asks for stderr uncompressed.
-_FILE_REDIRECT = re.compile(r"(?:^|\s)[\d*]?>{1,2}(?![>&])\s*(?![&\d])\S")
+# The trailing guard excludes ``&`` only. A digit after the operator belongs to
+# the target, as in ``> 1.log``; the digit that marks a stream sits *before* it,
+# as in ``1>&2``, and ``[\d*]?`` with the guard above already accounts for that
+# one. Excluding digits here read every target that opened with one as a merge
+# and sent those commands through the compressor with nothing on stdout.
+_FILE_REDIRECT = re.compile(r"(?:^|\s)[\d*]?>{1,2}(?![>&])\s*(?!&)\S")
 _NEWLINE = re.compile(r"[\r\n]")
 # Tokens that join two commands into one line. Only ``;`` and ``&&`` continue
 # past a leading directory change; the rest stay a reason to leave the line
@@ -162,10 +167,18 @@ def _clamp_input(short_name: str, tool_input: dict, client: str) -> int:
         cfg = _config.Config.load()
     except OSError:
         cfg = _config.Config()
-    if short_name == "Grep":
-        updated = _clamped_grep(tool_input, cfg)
-    else:
-        updated = _clamped_read(tool_input, cfg)
+    try:
+        if short_name == "Grep":
+            updated = _clamped_grep(tool_input, cfg)
+        else:
+            updated = _clamped_read(tool_input, cfg)
+    except (TypeError, ValueError):
+        # config.json is edited by hand and Config.load assigns whatever it
+        # finds without checking the type, so a null or a stray string reaches
+        # the int() calls above. README says 0 turns a clamp off, which makes
+        # null a reasonable guess for a reader after the same thing. A setting
+        # we cannot read turns its clamp off; it must never fail the tool call.
+        updated = None
     efficiency.observe_input(client, clamped=updated is not None)
     if updated is None:
         return 0
