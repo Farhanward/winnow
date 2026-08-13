@@ -63,8 +63,8 @@ So the hook now matches `Read` and `Grep`:
   full source line plus a `path:line:` prefix, and `-A`/`-B`/`-C` multiply it, so
   it costs several times what a path row costs. The tool's own default is 250 for
   every mode, which prices content and paths identically.
-- **Read**: a 400-line `limit` is injected only when the file exceeds 128 KiB and
-  the call carries no limit. The test is `os.path.getsize`, not a line count:
+- **Read**: a 400-line `limit` is injected only when the file is 128 KiB or
+  larger and the call carries no limit. The test is `os.path.getsize`, not a line count:
   this hook runs on every tool call, and opening a file to count its lines would
   put real I/O on the hot path to answer a question a size answers well enough.
   At roughly 60 bytes per line, 2,000 lines is about 120 KB, so below the
@@ -149,7 +149,10 @@ never reached `settings.json` despite the README describing it, and the new
 `Read` and `Grep` matchers would not have either. Anyone who installed through
 the CLI rather than editing the file by hand got Bash coverage only.
 
-Fixed in `winnow/cli.py`, with a test.
+Fixed in `winnow/cli.py`, with a test. The fix does not reach installs that
+already happened: anyone who ran `wn hook install` before it has the Bash
+matcher alone in `settings.json` and needs to run the command again to pick up
+the other three.
 
 ---
 
