@@ -260,6 +260,20 @@ def test_hook_skips_redirection_to_file():
     assert hook._wrapped("cat x > y") is None
 
 
+def test_a_redirect_target_that_starts_with_a_digit_is_still_a_redirect():
+    """The digit that marks a stream sits before the operator, as in ``1>&2``.
+    A digit after it belongs to the target and the target is an ordinary file.
+    Reading those as stream merges sent the commands through the compressor
+    with every byte already on its way to disk.
+    """
+    for cmd in ("cargo tree > 1.log", "cargo tree >2026.txt", "cargo tree 2> e.txt"):
+        assert hook._wrapped(cmd) is None, cmd
+        assert hook._wrapped(cmd, powershell=True) is None, cmd
+    # The merges this guard exists for are untouched by the narrower rule.
+    for cmd in ("cargo test 2>&1", "cargo test *>&1", "cargo test 1>&2"):
+        assert hook._wrapped(cmd, powershell=True) is not None, cmd
+
+
 def test_hook_still_skips_unwrappable_first_tokens_in_pipelines():
     assert hook._wrapped("ffprobe movie.mp4 | head -5") is None
 
@@ -547,6 +561,29 @@ def test_the_clamped_input_carries_every_original_parameter(
     assert set(updated) == set(read_input) | {"limit"}
     # offset says where to start reading, not how much to read.
     assert updated["offset"] == 900
+
+
+def test_a_hand_edited_config_value_disables_the_clamp_instead_of_raising(
+    isolated_home, tmp_path, capsys
+):
+    """Config.load assigns whatever config.json holds without checking its
+    type. README says 0 turns a clamp off, so null is a reasonable guess for a
+    reader who wants the same, and it used to reach int() and raise on every
+    Read and Grep the agent made.
+    """
+    home = pathlib.Path(os.environ["WINNOW_HOME"])
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps({"grep_head_limit_content": None, "read_clamp_lines": "lots"}),
+        encoding="utf-8",
+    )
+    assert _decision(capsys, "Grep", {
+        "pattern": "TODO", "output_mode": "content"}) is None
+    assert _decision(capsys, "Read", {"file_path": str(_big_file(tmp_path))}) is None
+    # A key left alone still clamps: one bad value is not a broken config.
+    assert _decision(capsys, "Grep", {"pattern": "TODO"})["head_limit"] == (
+        Config().grep_head_limit_paths
+    )
 
 
 def test_glob_is_left_alone_because_there_is_nothing_to_clamp(
