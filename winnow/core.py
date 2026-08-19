@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from . import rules as rules_mod
-from . import semantic, tokens
+from . import savings, semantic, tokens
 from .config import Config
 from .filters import detect
 from .store import Store
@@ -81,6 +81,7 @@ def compress(
         or (raw_tokens and saved / raw_tokens < cfg.min_saving)
     )
     if passthrough:
+        savings.record(raw_tokens, raw_tokens, "passthrough", True)
         return Result(command, raw, raw, raw_tokens, raw_tokens, 0, 0.0,
                       None, "passthrough", True)
 
@@ -89,6 +90,9 @@ def compress(
         handle = store.put(command, cwd, exit_code, raw, raw_tokens,
                            comp_tokens, label)
 
+    # The lifetime counter is written here rather than beside the store, so
+    # that pruning the store cannot rewrite the published history.
+    savings.record(raw_tokens, comp_tokens, label, False)
     return Result(command, raw, body, raw_tokens, comp_tokens, saved, pct,
                   handle, label, False)
 

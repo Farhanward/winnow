@@ -10,7 +10,7 @@ import sys
 import time
 from typing import List, Optional
 
-from . import __version__, agent, core, efficiency, hook, reads
+from . import __version__, agent, core, efficiency, hook, reads, savings
 from . import rules as rules_mod
 from . import semantic, tokens
 from .filters import all_filters
@@ -167,21 +167,75 @@ def _slice_lines(text: str, spec: str) -> str:
 # gain: savings analytics
 # --------------------------------------------------------------------------- #
 def cmd_gain(args) -> int:
+    # getattr rather than attribute access: the flags are optional to a caller
+    # that builds its own Namespace, and a missing one should not raise inside
+    # a reporting command.
+    want_json = getattr(args, "json", False)
+    history = getattr(args, "history", False)
+    limit = int(getattr(args, "limit", 10) or 10)
+
+    ledger = savings.Savings()
+    life = ledger.totals()
+    per_filter = ledger.by_filter(limit=limit if history else 6)
+    ledger.close()
+
     store = Store()
-    t = store.totals()
+    held = store.totals()
     exact = "exact (tiktoken)" if tokens.using_exact() else "estimated (heuristic)"
-    _print("─" * 52)
-    _print(f"  winnow savings · {t['count']} outputs compressed")
-    _print("─" * 52)
-    _print(f"  tokens in    : {t['raw']:>12,}")
-    _print(f"  tokens out   : {t['comp']:>12,}")
-    _print(f"  tokens saved : {t['saved']:>12,}")
-    _print(f"  reduction    : {t['pct']:>11.1f}%")
-    _print(f"  counting     : {exact}")
-    _print("─" * 52)
-    if args.history:
+
+    if want_json:
+        _print(json.dumps({
+            "lifetime": life,
+            "by_filter": per_filter,
+            "store": {
+                "outputs_held": held["count"],
+                "tokens_in": held["raw"],
+                "tokens_out": held["comp"],
+                "tokens_saved": held["saved"],
+                "reduction_pct": round(held["pct"], 1),
+            },
+            "counting": exact,
+        }, indent=2))
+        store.close()
+        return 0
+
+    _print("─" * 58)
+    _print("  winnow savings · lifetime counter")
+    _print("─" * 58)
+    _print(f"  outputs seen    : {life['outputs_seen']:>14,}")
+    _print(f"  compressed      : {life['outputs_compressed']:>14,}   "
+           f"{life['outputs_passthrough']:,} passed through")
+    _print(f"  tokens in       : {life['raw_tokens']:>14,}")
+    _print(f"  tokens out      : {life['out_tokens']:>14,}")
+    _print(f"  tokens saved    : {life['tokens_saved']:>14,}")
+    _print(f"  reduction       : {life['reduction_on_compressed_pct']:>13.1f}%   "
+           f"of what compressed")
+    # The honest denominator. Dividing by the outputs that happened to compress
+    # picks it after seeing the answer; this one divides by everything the
+    # compressor was handed, and it is always the smaller number.
+    _print(f"                  : {life['reduction_overall_pct']:>13.1f}%   "
+           f"of everything seen")
+    if life["largest_single_saving"]:
+        _print(f"  largest single  : {life['largest_single_saving']:>14,}   "
+               f"{life['largest_share_pct']:.1f}% of all savings")
+    _print(f"  counting        : {exact}")
+
+    if per_filter:
+        _print("─" * 58)
+        _print("  where it came from:")
+        for row in per_filter:
+            _print(f"    {row['tokens_saved']:>12,}  {row['reduction_pct']:>5.1f}%  "
+                   f"{row['outputs']:>4} out  {row['label'][:26]}")
+
+    _print("─" * 58)
+    _print("  recall store · a cache with a size cap, not a lifetime total")
+    _print(f"    {held['count']:,} outputs still held, "
+           f"{held['saved']:,} tokens saved among them")
+    _print("─" * 58)
+
+    if history:
         _print("  recent:")
-        for rec in store.recent(limit=args.limit):
+        for rec in store.recent(limit=limit):
             saved = rec.raw_tokens - rec.comp_tokens
             pct = (saved / rec.raw_tokens * 100) if rec.raw_tokens else 0
             _print(f"    [{rec.id}] {pct:5.0f}%  "
@@ -663,6 +717,7 @@ def build_parser() -> argparse.ArgumentParser:
     rc.set_defaults(func=cmd_recall)
 
     g = sub.add_parser("gain", help="show token savings analytics")
+    g.add_argument("--json", action="store_true", help="machine-readable output")
     g.add_argument("--history", action="store_true", help="list recent outputs")
     g.add_argument("--limit", type=int, default=20)
     g.set_defaults(func=cmd_gain)
