@@ -99,6 +99,18 @@ class Config:
     # which is only sensible with compaction hooked up.
     dedupe_window_seconds: int = 7200
 
+    # --- subagents -------------------------------------------------------- #
+    # A subagent starts cold, pays its own floor on every request it makes,
+    # and returns a report that lands in the parent's context and stays there.
+    # They were 2,760 of 14,955 requests and 8.7% of all context read on the
+    # machine this was measured on. The hook appends a short brief to the
+    # prompt, because a rule in a memory file is advice a model can forget
+    # under load and the one time it forgets is the expensive one.
+    subagent_budget: bool = True
+    # Word ceiling the brief asks the subagent to report within. 0 drops that
+    # line and leaves the rest of the brief in place.
+    subagent_report_words: int = 200
+
     @classmethod
     def load(cls) -> "Config":
         cfg = cls()

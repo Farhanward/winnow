@@ -629,7 +629,7 @@ def test_the_hook_snippet_covers_the_tools_it_can_act_on(isolated_home):
         entry["matcher"]
         for entry in hook.settings_snippet()["hooks"]["PreToolUse"]
     ]
-    assert matchers == ["Bash", "PowerShell", "Read", "Grep"]
+    assert matchers == ["Bash", "PowerShell", "Read", "Grep", "Task", "Agent"]
     # Glob has no matcher because the hook would have nothing to do in it.
     assert "Glob" not in matchers
 
@@ -645,7 +645,7 @@ def test_install_writes_every_matcher_and_stays_idempotent(tmp_path, capsys):
 
     pre = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
     assert [entry["matcher"] for entry in pre] == [
-        "Bash", "PowerShell", "Read", "Grep"]
+        "Bash", "PowerShell", "Read", "Grep", "Task", "Agent"]
 
 
 def test_gemini_runs_are_counted(tmp_path):

@@ -88,6 +88,8 @@ _SHELL_TOOLS = {"Bash", "PowerShell", "shell_command", "exec_command"}
 # less is to rewrite the pattern, which changes what the caller asked for.
 # There is nothing here to clamp, so please do not add it back.
 _CLAMP_TOOLS = {"Read", "Grep"}
+# The subagent tool has been called both names across versions.
+_SUBAGENT_TOOLS = {"Task", "Agent"}
 
 
 def settings_snippet(command: str = "wn hook run") -> dict:
@@ -105,7 +107,7 @@ def settings_snippet(command: str = "wn hook run") -> dict:
                     "matcher": matcher,
                     "hooks": [{"type": "command", "command": command}],
                 }
-                for matcher in ("Bash", "PowerShell", "Read", "Grep")
+                for matcher in ("Bash", "PowerShell", "Read", "Grep", "Task", "Agent")
             ],
             # Not a tool event. Compaction rewrites what the model can see, so
             # the read ledger has to forget the session when it happens, or it
@@ -143,6 +145,87 @@ def _clamped_grep(tool_input: dict, cfg):
         "matches. Pass an explicit head_limit to override, 0 for unlimited."
     )
     return updated, note
+
+
+# Subagents are the other half of the input bill. Each one starts cold, spends
+# its own floor on every request it makes, and returns a report that lands in
+# the parent's context and stays there. On the development machine they are
+# 2,760 of 14,955 requests and 8.7% of all context read.
+#
+# A hook is the only place this can be enforced. A rule in a memory file asking
+# the model to brief its subagents is advice it can forget under load, and the
+# one time it forgets is a subagent reading whole files to orient itself.
+_BUDGET_MARK = "Token budget (winnow):"
+
+
+def _budget_block(cfg) -> str:
+    """The brief appended to a subagent prompt.
+
+    Deliberately short. It is paid once per subagent and has to earn its own
+    length back, so it carries the four habits that cost the most and nothing
+    that reads as style advice.
+    """
+    try:
+        words = int(getattr(cfg, "subagent_report_words", 200))
+    except (TypeError, ValueError):
+        words = 200
+    lines = [
+        _BUDGET_MARK,
+        "- Read: pass offset and limit. Never read a whole file to orient.",
+        "- Grep: pass head_limit. Prefer files_with_matches before content mode.",
+        "- Never read a file through the shell, and never re-read a file you "
+        "just edited to verify.",
+        "- Shell output is compressed for you automatically. Do not call `wn` "
+        "yourself.",
+    ]
+    if words > 0:
+        lines.append(
+            f"- Report in under {words} words: findings and file:line, not a "
+            "restatement of the task."
+        )
+    return "\n".join(lines)
+
+
+def _budgeted_subagent(tool_input: dict, cfg):
+    """Append a token brief to a subagent prompt, or return None to leave it."""
+    if not getattr(cfg, "subagent_budget", True):
+        return None
+    prompt = tool_input.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return None
+    if _BUDGET_MARK in prompt:
+        # Already briefed, by a previous hook pass or by the caller's own
+        # template. Appending a second copy would spend the tokens twice.
+        return None
+    updated = dict(tool_input)
+    updated["prompt"] = prompt.rstrip() + "\n\n" + _budget_block(cfg)
+    return updated
+
+
+def _brief_subagent(tool_input: dict) -> int:
+    """Append the token brief to a subagent prompt and emit the full input."""
+    from . import config as _config
+
+    try:
+        cfg = _config.Config.load()
+    except OSError:
+        cfg = _config.Config()
+    try:
+        updated = _budgeted_subagent(tool_input, cfg)
+    except (TypeError, ValueError):
+        # A hand-edited config must never cost the agent a subagent.
+        updated = None
+    if updated is None:
+        return 0
+    decision = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "updatedInput": updated,
+        }
+    }
+    sys.stdout.write(json.dumps(decision))
+    return 0
 
 
 def _forget_session(session: str) -> int:
@@ -435,6 +518,8 @@ def run_hook(stdin_text: Optional[str] = None) -> int:
     short_name = tool_name.rsplit("__", 1)[-1].rsplit(".", 1)[-1]
     is_codex = bool(event.get("turn_id") or os.environ.get("CODEX_THREAD_ID"))
     client = "codex" if is_codex else "claude"
+    if short_name in _SUBAGENT_TOOLS:
+        return _brief_subagent(event.get("tool_input") or {})
     if short_name in _CLAMP_TOOLS:
         return _clamp_input(
             short_name,
