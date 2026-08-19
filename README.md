@@ -337,6 +337,39 @@ every `Read` the agent makes, and hashing a large file on that path would cost
 more than the re-read it is trying to save. Set `dedupe_reads` to `false` in
 `~/.winnow/config.json` to serve every read in full.
 
+## Briefing a subagent
+
+A subagent starts cold. It pays its own floor on every request it makes, spends
+its first turns re-deriving context the parent already had, and returns a report
+that lands in the parent's context and stays there. On this machine they are
+2,760 of 14,955 requests and 8.7% of all context read.
+
+A hook cannot make a subagent cheaper after the fact, but it can send it out
+briefed. When the agent spawns one, the prompt gets a short brief appended:
+
+```
+Token budget (winnow):
+- Read: pass offset and limit. Never read a whole file to orient.
+- Grep: pass head_limit. Prefer files_with_matches before content mode.
+- Never read a file through the shell, and never re-read a file you just
+  edited to verify.
+- Shell output is compressed for you automatically. Do not call `wn` yourself.
+- Report in under 200 words: findings and file:line, not a restatement of the
+  task.
+```
+
+The caller's prompt is never rewritten, only appended to, because rewriting the
+words would change the task. A prompt that already carries the brief is left
+alone, so nothing is paid twice. `subagent_budget: false` turns it off, and
+`subagent_report_words: 0` drops the word ceiling while keeping the rest.
+
+This is the one piece of Winnow that spends tokens to save them: the brief costs
+about eighty tokens per subagent. It is worth it only if a subagent would
+otherwise read a whole file to orient itself, which is exactly what the reading
+habits in it are aimed at. A memory-file rule asking for the same discipline is
+advice the model can forget under load, and the one time it forgets is the
+expensive one.
+
 ## The agent's own budget
 
 Compressing terminal output only reaches the bytes a hook can rewrite. The
