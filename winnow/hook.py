@@ -19,7 +19,9 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import sys
+import time
 from typing import Optional
 
 # First tokens we consider worth wrapping. Everything else is left alone.
@@ -104,7 +106,12 @@ def settings_snippet(command: str = "wn hook run") -> dict:
                     "hooks": [{"type": "command", "command": command}],
                 }
                 for matcher in ("Bash", "PowerShell", "Read", "Grep")
-            ]
+            ],
+            # Not a tool event. Compaction rewrites what the model can see, so
+            # the read ledger has to forget the session when it happens, or it
+            # will withhold a file the model no longer holds.
+            "PreCompact": [{"hooks": [{"type": "command", "command": command}]}],
+            "SessionEnd": [{"hooks": [{"type": "command", "command": command}]}],
         }
     }
 
@@ -134,6 +141,79 @@ def _clamped_grep(tool_input: dict, cfg):
         f"winnow set head_limit={limit} on this Grep because the call carried "
         "none. Results past that row are not shown and there may be more "
         "matches. Pass an explicit head_limit to override, 0 for unlimited."
+    )
+    return updated, note
+
+
+def _forget_session(session: str) -> int:
+    """Drop the read ledger for one session. Never fails the event."""
+    if not session:
+        return 0
+    from . import reads as _reads
+
+    ledger = None
+    try:
+        ledger = _reads.Ledger()
+        ledger.forget_session(session)
+        ledger.prune(_reads.DEFAULT_WINDOW_SECONDS)
+    except sqlite3.Error:
+        pass
+    finally:
+        if ledger is not None:
+            ledger.close()
+    return 0
+
+
+def _repeat_read(tool_input: dict, cfg, session: str):
+    """Cut a re-read of a file the agent already has, or return None.
+
+    39% of the Read calls in the transcripts on the development machine were
+    the same file, in the same session, read again. When the file has not
+    changed in between, the whole second copy is spend on content the model was
+    already given.
+
+    A stub rather than a denial, because a denied tool call explains itself to
+    the user and not to the model. And a stub only once: the next identical
+    request is served in full, since context may have been compacted and the
+    model may genuinely no longer hold what the ledger thinks it holds.
+    """
+    if not session or not getattr(cfg, "dedupe_reads", True):
+        return None
+    path = tool_input.get("file_path")
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        window = int(getattr(cfg, "dedupe_window_seconds", 0) or 0)
+    except (TypeError, ValueError):
+        window = 0
+
+    from . import reads as _reads
+
+    ledger = None
+    try:
+        ledger = _reads.Ledger()
+        offset, limit = tool_input.get("offset"), tool_input.get("limit")
+        seen = ledger.check(session, path, offset, limit, window)
+        if seen is None:
+            ledger.record(session, path, offset, limit, suppressed=False)
+            return None
+        ledger.record(session, path, offset, limit, suppressed=True)
+    except sqlite3.Error:
+        # The ledger is an optimisation. A database that cannot be opened or
+        # written must never cost the agent a file it asked for.
+        return None
+    finally:
+        if ledger is not None:
+            ledger.close()
+
+    updated = dict(tool_input)
+    updated["limit"] = 1
+    note = (
+        f"winnow suppressed this re-read: you already read {os.path.basename(path)} "
+        f"in this session {_reads.elapsed(time.time() - seen.served_at)}, and the "
+        "file has not changed since (same size and timestamp). What you were "
+        "given then is still current, so use it. If you no longer have it, "
+        "request this exact read again and it will be served in full."
     )
     return updated, note
 
@@ -180,7 +260,9 @@ def _clamped_read(tool_input: dict, cfg):
     return updated, note
 
 
-def _clamp_input(short_name: str, tool_input: dict, client: str) -> int:
+def _clamp_input(
+    short_name: str, tool_input: dict, client: str, session: str = ""
+) -> int:
     """Cap what Read/Grep ask for and emit the full input back."""
     from . import config as _config
     from . import efficiency
@@ -193,7 +275,9 @@ def _clamp_input(short_name: str, tool_input: dict, client: str) -> int:
         if short_name == "Grep":
             clamp = _clamped_grep(tool_input, cfg)
         else:
-            clamp = _clamped_read(tool_input, cfg)
+            clamp = _repeat_read(tool_input, cfg, session) or _clamped_read(
+                tool_input, cfg
+            )
     except (TypeError, ValueError):
         # config.json is edited by hand and Config.load assigns whatever it
         # finds without checking the type, so a null or a stray string reaches
@@ -339,12 +423,25 @@ def run_hook(stdin_text: Optional[str] = None) -> int:
         event = json.loads(data_raw) if data_raw.strip() else {}
     except json.JSONDecodeError:
         return 0
+    # Compaction rewrites the window the model can see, so anything the read
+    # ledger believes the model still holds stops being true at that moment.
+    # Forgetting the session is the difference between a safe optimisation and
+    # one that withholds a file the model can no longer see.
+    stage = str(event.get("hook_event_name") or "")
+    if stage in ("PreCompact", "PostCompact", "SessionEnd"):
+        return _forget_session(str(event.get("session_id") or ""))
+
     tool_name = str(event.get("tool_name") or "")
     short_name = tool_name.rsplit("__", 1)[-1].rsplit(".", 1)[-1]
     is_codex = bool(event.get("turn_id") or os.environ.get("CODEX_THREAD_ID"))
     client = "codex" if is_codex else "claude"
     if short_name in _CLAMP_TOOLS:
-        return _clamp_input(short_name, event.get("tool_input") or {}, client)
+        return _clamp_input(
+            short_name,
+            event.get("tool_input") or {},
+            client,
+            str(event.get("session_id") or ""),
+        )
     if short_name not in _SHELL_TOOLS:
         return 0
     command = (event.get("tool_input") or {}).get("command", "")

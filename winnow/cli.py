@@ -10,7 +10,7 @@ import sys
 import time
 from typing import List, Optional
 
-from . import __version__, agent, core, efficiency, hook
+from . import __version__, agent, core, efficiency, hook, reads
 from . import rules as rules_mod
 from . import semantic, tokens
 from .filters import all_filters
@@ -362,13 +362,16 @@ def _hook_install(settings_path: Optional[str]) -> int:
         except (json.JSONDecodeError, OSError):
             data = {}
     hooks = data.setdefault("hooks", {})
-    pre = hooks.setdefault("PreToolUse", [])
-    # Every matcher, not just the first one. Installing entry [0] alone left
-    # the PowerShell matcher out of the settings file the whole time the README
-    # said it went in, and it would now leave out Read and Grep as well.
-    for entry in snippet["hooks"]["PreToolUse"]:
-        if not any(json.dumps(e) == json.dumps(entry) for e in pre):
-            pre.append(entry)
+    # Every matcher of every event, not just the first matcher of the first
+    # event. Installing entry [0] alone left the PowerShell matcher out of the
+    # settings file the whole time the README said it went in; reading only
+    # PreToolUse would now leave out the compaction events the read ledger
+    # needs to stay correct.
+    for event, entries in snippet["hooks"].items():
+        existing = hooks.setdefault(event, [])
+        for entry in entries:
+            if not any(json.dumps(e) == json.dumps(entry) for e in existing):
+                existing.append(entry)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2))
     _print(f"winnow: hook installed to {path}")
@@ -540,6 +543,61 @@ def _agent_tools(args) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# reads: what the hook believes the agent has already been shown
+# --------------------------------------------------------------------------- #
+def cmd_reads(args) -> int:
+    """Inspect or reset the repeat-read ledger.
+
+    A suppression the user cannot inspect is a suppression they cannot trust,
+    which is the whole reason this command exists.
+    """
+    ledger = reads.Ledger()
+    try:
+        if args.action == "clear":
+            removed = ledger.conn.execute("DELETE FROM reads").rowcount
+            ledger.conn.commit()
+            _print(f"winnow: cleared {removed} remembered read(s)")
+            return 0
+
+        rows = ledger.conn.execute(
+            "SELECT session, key, served_at, suppressed FROM reads "
+            "ORDER BY served_at DESC"
+        ).fetchall()
+    finally:
+        ledger.close()
+
+    if args.json:
+        _print(json.dumps([
+            {
+                "session": r[0],
+                "path": r[1].split("|")[0],
+                "offset": r[1].split("|")[1],
+                "limit": r[1].split("|")[2],
+                "served_at": r[2],
+                "suppressed": bool(r[3]),
+            }
+            for r in rows
+        ], indent=2))
+        return 0
+
+    if not rows:
+        _print("winnow: the read ledger is empty.")
+        return 0
+
+    suppressed = sum(1 for r in rows if r[3])
+    sessions = len({r[0] for r in rows})
+    _print(f"winnow reads · {len(rows)} remembered across {sessions} session(s), "
+           f"{suppressed} already suppressed once")
+    for session, key, served_at, was_suppressed in rows[: args.limit]:
+        path = key.split("|")[0]
+        mark = "suppressed" if was_suppressed else "served"
+        when = reads.elapsed(time.time() - float(served_at or 0))
+        _print(f"  {mark:<11} {when:<16} {os.path.basename(path)[:40]:<42} "
+               f"{session[:8]}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # parser
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
@@ -610,6 +668,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="only read transcripts touched in the last N days")
     ag.add_argument("--json", action="store_true", help="machine-readable output")
     ag.set_defaults(func=cmd_agent)
+
+    rd = sub.add_parser("reads", help="inspect the repeat-read ledger")
+    rd.add_argument("action", nargs="?", default="stats", choices=["stats", "clear"])
+    rd.add_argument("--limit", type=int, default=20, help="rows to show")
+    rd.add_argument("--json", action="store_true", help="machine-readable output")
+    rd.set_defaults(func=cmd_reads)
 
     h = sub.add_parser("hook", help="Claude Code / agent integration")
     h.add_argument("action", choices=["show", "run", "install"])
