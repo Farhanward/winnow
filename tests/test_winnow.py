@@ -14,12 +14,17 @@ import sys
 
 import pytest
 
+# The package has to be importable before it is imported, and an editable
+# install is not guaranteed on a bare checkout. The imports below sit after
+# this line on purpose, which is what the noqa markers are for.
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from winnow import cli, core, efficiency, hook, patterns, rules, semantic, tokens
-from winnow.config import Config
-from winnow.filters import detect
-from winnow.store import Store, is_handle
+from winnow import (  # noqa: E402
+    cli, core, efficiency, hook, patterns, rules, semantic, tokens,
+)
+from winnow.config import Config  # noqa: E402
+from winnow.filters import detect  # noqa: E402
+from winnow.store import Store, is_handle  # noqa: E402
 
 
 @pytest.fixture()
@@ -740,3 +745,113 @@ def test_the_ripgrep_rule_is_wired_to_the_action():
     assert "ripgrep" in applied
     assert "more in src/server.rs" in out
     assert len(out.split("\n")) < 15
+
+
+# --------------------------------------------------------------------------- #
+# a cap the model cannot see is the one way clamping could do harm
+# --------------------------------------------------------------------------- #
+def _context(capsys, tool_name, tool_input):
+    """Run the hook and return the additionalContext it sent back, if any."""
+    event = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+    assert hook.run_hook(event) == 0
+    out = capsys.readouterr().out.strip()
+    if not out:
+        return None
+    return json.loads(out)["hookSpecificOutput"].get("additionalContext")
+
+
+def test_a_clamped_read_tells_the_model_it_is_not_the_whole_file(
+    isolated_home, tmp_path, capsys
+):
+    path = _big_file(tmp_path)
+    note = _context(capsys, "Read", {"file_path": str(path)})
+
+    assert note is not None
+    assert "400 lines" in note
+    assert "not the whole file" in note
+    # It has to say how to get the rest, or the model is left guessing.
+    assert "offset" in note
+
+
+def test_a_clamped_read_reports_the_range_from_the_callers_offset(
+    isolated_home, tmp_path, capsys
+):
+    path = _big_file(tmp_path)
+    note = _context(capsys, "Read", {"file_path": str(path), "offset": 1000})
+
+    assert "lines 1000-1399" in note
+
+
+def test_a_clamped_grep_says_matches_may_be_missing(isolated_home, capsys):
+    note = _context(
+        capsys, "Grep", {"pattern": "x", "output_mode": "content"}
+    )
+
+    assert "head_limit=80" in note
+    assert "more matches" in note
+    assert "0 for unlimited" in note
+
+
+def test_an_unclamped_call_sends_no_note(isolated_home, tmp_path, capsys):
+    small = tmp_path / "small.txt"
+    small.write_text("one line\n", encoding="utf-8")
+
+    assert _context(capsys, "Read", {"file_path": str(small)}) is None
+
+
+def test_an_explicit_limit_is_never_second_guessed_or_annotated(
+    isolated_home, tmp_path, capsys
+):
+    path = _big_file(tmp_path)
+
+    assert _context(capsys, "Read", {"file_path": str(path), "limit": 9000}) is None
+
+
+# --------------------------------------------------------------------------- #
+# JSON elision has to be legible as an elision
+# --------------------------------------------------------------------------- #
+def test_depth_limit_names_what_was_dropped():
+    """A bare ellipsis hid three things at once.
+
+    It hid how much was dropped, it hid what shape was dropped, and being a
+    plain string it was indistinguishable from a value that genuinely is an
+    ellipsis. A reader has to be able to tell an elision from data.
+    """
+    deep = {"a": {"b": {"c": {"d": {"e": 1, "f": 2, "g": 3}}}}}
+    out, _ = semantic.compress_json(json.dumps(deep), max_depth=4)
+    parsed = json.loads(out)
+
+    marker = parsed["a"]["b"]["c"]["d"]
+    assert "winnow" in marker
+    assert "3 keys" in marker
+
+
+def test_depth_limit_names_an_elided_array_by_length():
+    deep = {"a": {"b": [1, 2, 3, 4, 5]}}
+    out, _ = semantic.compress_json(json.dumps(deep), max_depth=2)
+    parsed = json.loads(out)
+
+    assert "array of 5 items" in parsed["a"]["b"]
+
+
+def test_a_scalar_at_the_depth_limit_is_kept_not_elided():
+    """Eliding a number costs a reader information and saves nobody anything."""
+    out, _ = semantic.compress_json(json.dumps({"a": 42}), max_depth=1)
+    parsed = json.loads(out)
+
+    assert parsed["a"] == 42
+
+
+def test_elision_markers_stay_valid_json():
+    deep = {"level": {"deeper": {"deepest": {"x": 1}}}}
+    out, _ = semantic.compress_json(json.dumps(deep), max_depth=2)
+
+    json.loads(out)  # round-trips without raising
+
+
+def test_truncated_array_and_string_still_report_their_full_size():
+    payload = {"items": list(range(50)), "blob": "z" * 500}
+    out, _ = semantic.compress_json(json.dumps(payload), max_array=3, max_str=20)
+
+    assert "47 more of 50 items" in out
+    assert "+480 chars" in out
