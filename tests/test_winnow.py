@@ -855,3 +855,63 @@ def test_truncated_array_and_string_still_report_their_full_size():
 
     assert "47 more of 50 items" in out
     assert "+480 chars" in out
+
+
+# --------------------------------------------------------------------------- #
+# rules overlap: the same action reaching the same line more than once
+# --------------------------------------------------------------------------- #
+def test_two_clips_on_one_line_report_the_true_total():
+    """A `rg` line passes clip-monster-lines at 800 and ripgrep at 300.
+
+    Reporting only the second pass said 515 characters were missing when 1,714
+    were. A marker that undercounts is worse than no marker: it invites the
+    reader to treat a fragment as nearly whole.
+    """
+    cfg = Config()
+    line = "src/app.ts:42:" + "A" * 2000
+    out, applied = rules.apply_rules("rg -n pattern src/", line, rules.load_rules(), cfg)
+
+    assert applied == ["clip-monster-lines", "ripgrep"]
+    assert out.endswith(f"⟨+{len(line) - 300} chars⟩")
+    assert len(out.split("…")[0]) == 300
+
+
+def test_a_single_clip_still_reports_plainly():
+    cfg = Config()
+    line = "x" * 1000
+    out = rules._run_action("max_line_len", 300, line, cfg, {"dropped": 0})
+
+    assert out.endswith("⟨+700 chars⟩")
+
+
+def test_clipping_a_line_already_shorter_than_the_cap_changes_nothing():
+    cfg = Config()
+    already = "abc… ⟨+50 chars⟩"
+    out = rules._run_action("max_line_len", 300, already, cfg, {"dropped": 0})
+
+    assert out == already
+
+
+def test_repeated_folding_does_not_double_count_or_re_fold():
+    """collapse_repeats reaches a cargo build three times over.
+
+    The passes have different thresholds so the later ones do catch runs the
+    generic pass leaves, but running them in sequence must not fold a marker
+    into another marker or lose a line.
+    """
+    text = "\n".join(["warning: unused variable `x`"] * 6 + ["error: real problem"])
+    once, _ = patterns.collapse_repeats(text, 3)
+    twice, removed = patterns.collapse_repeats(once, 3)
+
+    assert twice == once
+    assert removed == 0
+    assert "error: real problem" in twice
+
+
+def test_the_line_that_matters_survives_every_overlapping_rule():
+    cfg = Config()
+    noise = "\n".join(f"   Compiling crate{i} v0.1.0" for i in range(40))
+    text = noise + "\nerror[E0308]: mismatched types\n" + noise
+    out, _ = rules.apply_rules("cargo build", text, rules.load_rules(), cfg)
+
+    assert "error[E0308]: mismatched types" in out
