@@ -10,7 +10,7 @@ import sys
 import time
 from typing import List, Optional
 
-from . import __version__, core, efficiency, hook
+from . import __version__, agent, core, efficiency, hook
 from . import rules as rules_mod
 from . import semantic, tokens
 from .config import Config
@@ -377,6 +377,127 @@ def _hook_install(settings_path: Optional[str]) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# agent: where the token budget actually goes, and what to do about it
+# --------------------------------------------------------------------------- #
+def cmd_agent(args) -> int:
+    if args.action == "audit":
+        return _agent_audit(args)
+    if args.action == "tools":
+        return _agent_tools(args)
+    return 2
+
+
+def _agent_audit(args) -> int:
+    report = agent.scan(days=args.days)
+    if not report.files:
+        _print("winnow: no agent transcripts found.")
+        _print("Looked in ~/.claude/projects and ~/.codex/sessions. Set "
+               "WINNOW_TRANSCRIPTS to point somewhere else.")
+        return 0
+
+    tools = sorted(report.tool_calls.items(), key=lambda kv: -kv[1])
+    heavy = sorted(report.tool_result_bytes.items(), key=lambda kv: -kv[1])
+    if args.json:
+        _print(json.dumps({
+            "files": report.files,
+            "sessions": len(report.sessions),
+            "requests": report.requests,
+            "subagent_requests": report.subagent_requests,
+            "tokens": report.totals,
+            "subagent_tokens": report.subagent_totals,
+            "session_floor": report.floor,
+            "floor_cost": report.fixed_cost,
+            "subagent_share_pct": round(report.subagent_share, 1),
+            "tool_calls": dict(tools),
+            "tool_result_bytes": dict(heavy),
+            "mcp_calls": report.mcp_calls,
+        }, indent=2))
+        return 0
+
+    window = f"last {args.days} days" if args.days else "all transcripts"
+    _print("─" * 62)
+    _print(f"  winnow agent audit · {window}")
+    _print("─" * 62)
+    _print(f"  sessions          : {len(report.sessions):>14,}")
+    _print(f"  billed requests   : {report.requests:>14,}")
+    _print(f"  context re-read   : {report.context_read:>14,}")
+    _print(f"  new context       : "
+           f"{report.totals.get('cache_creation_input_tokens', 0):>14,}")
+    _print(f"  output            : "
+           f"{report.totals.get('output_tokens', 0):>14,}")
+    _print("─" * 62)
+    _print(f"  session floor     : {report.floor:>14,}   paid on every request")
+    _print(f"  floor × requests  : {report.fixed_cost:>14,}   fixed cost")
+    _print(f"  subagent requests : {report.subagent_requests:>14,}   "
+           f"{report.subagent_share:.1f}% of context read")
+    _print("─" * 62)
+
+    if tools:
+        _print("  most-called tools:")
+        for name, calls in tools[:6]:
+            _print(f"    {calls:>6,}  {name}")
+    if heavy:
+        _print("  largest results returned (bytes):")
+        for name, size in heavy[:6]:
+            _print(f"    {size:>12,}  {name}")
+    _print("")
+    _print("The floor is prompt prefix: system prompt, memory files, skill "
+           "descriptions,")
+    _print("and every connected MCP server's tool schema. Run `wn agent "
+           "tools` to see")
+    _print("which of those were never called.")
+    return 0
+
+
+def _agent_tools(args) -> int:
+    report = agent.scan(days=args.days)
+    used, idle = agent.server_usage(report)
+    configured = agent.configured_servers()
+
+    if args.json:
+        _print(json.dumps({
+            "configured": configured,
+            "called": used,
+            "idle": idle,
+            "session_floor": report.floor,
+            "requests": report.requests,
+        }, indent=2))
+        return 0
+
+    if not configured and not used:
+        _print("winnow: no MCP servers or plugins found in the agent config.")
+        return 0
+
+    _print("winnow agent tools · what the prompt prefix carries")
+    _print("")
+    if used:
+        _print("called at least once:")
+        for name, calls in sorted(used.items(), key=lambda kv: -kv[1]):
+            source = configured.get(name, "not in config")
+            _print(f"  {calls:>6,}  {name}   ({source})")
+    if idle:
+        _print("")
+        _print("configured but never called in the transcripts read:")
+        for name in idle:
+            _print(f"          {name}   ({configured.get(name, '?')})")
+        _print("")
+        _print(f"Each one ships its tool schema in every request. The floor "
+               f"here is {report.floor:,}")
+        _print(f"tokens across {report.requests:,} requests. Disabling a "
+               f"server you do not call")
+        _print("lowers that floor for every request after it, and re-enabling "
+               "it is one edit.")
+        _print("")
+        _print("Winnow does not edit your agent config. The names above are "
+               "the ones to")
+        _print("remove from enabledPlugins or mcpServers if you agree.")
+    else:
+        _print("")
+        _print("Every configured server was called. Nothing idle to trim.")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # parser
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
@@ -440,6 +561,13 @@ def build_parser() -> argparse.ArgumentParser:
                     choices=["list", "path", "test"])
     ru.add_argument("--cmd", help="command to test rule matching against")
     ru.set_defaults(func=cmd_rules)
+
+    ag = sub.add_parser("agent", help="audit and tune the agent's own token budget")
+    ag.add_argument("action", choices=["audit", "tools"])
+    ag.add_argument("--days", type=int, default=None,
+                    help="only read transcripts touched in the last N days")
+    ag.add_argument("--json", action="store_true", help="machine-readable output")
+    ag.set_defaults(func=cmd_agent)
 
     h = sub.add_parser("hook", help="Claude Code / agent integration")
     h.add_argument("action", choices=["show", "run", "install"])

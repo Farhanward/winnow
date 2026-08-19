@@ -24,6 +24,33 @@ from . import config
 HANDLE_RE = re.compile(r"^[0-9a-f]{6}$")
 
 
+def _capped(raw: str, cfg) -> str:
+    """Cut one payload down to the per-row cap before it is stored.
+
+    Recall exists so that a compressed view is never the only copy of an
+    output, and what a reader goes back for is the head of it. Keeping a
+    300 MB `rg` sweep in full serves nobody and is most of how a store reaches
+    a gigabyte. The cut is recorded in the text, so recall never quietly
+    returns a short answer to a long question.
+    """
+    try:
+        cap = int(cfg.max_row_bytes)
+    except (TypeError, ValueError):
+        return raw
+    if cap <= 0:
+        return raw
+    data = raw.encode("utf-8", "replace")
+    if len(data) <= cap:
+        return raw
+    kept = data[:cap].decode("utf-8", "ignore")
+    dropped = len(data) - len(kept.encode("utf-8"))
+    marker = (
+        f"\n[winnow: stored head only, {dropped:,} more bytes dropped "
+        f"at the {cap:,}-byte per-output cap]\n"
+    )
+    return kept + marker
+
+
 @dataclass
 class Record:
     id: str
@@ -96,6 +123,7 @@ class Store:
         """Store a full raw output and return its recall handle."""
         h = self._new_handle()
         ts = time.time()
+        raw = _capped(raw, config.Config.load())
         self.conn.execute(
             "INSERT INTO outputs VALUES (?,?,?,?,?,?,?,?,?)",
             (h, ts, command, cwd, exit_code, raw, raw_tokens, comp_tokens, filt),
@@ -111,23 +139,108 @@ class Store:
 
     def _prune(self) -> None:
         cfg = config.Config.load()
+        dropped = self._prune_rows(cfg) + self._prune_bytes(cfg)
+        if dropped:
+            self.conn.commit()
+            self._reclaim(cfg)
+
+    def _prune_rows(self, cfg) -> int:
+        """Drop the oldest rows until the row count fits."""
+        try:
+            cap = int(cfg.max_store_rows)
+        except (TypeError, ValueError):
+            return 0
+        if cap <= 0:
+            return 0
         n = self.conn.execute("SELECT COUNT(*) FROM outputs").fetchone()[0]
-        if n <= cfg.max_store_rows:
-            return
-        excess = n - cfg.max_store_rows
+        if n <= cap:
+            return 0
+        return self._delete_oldest(n - cap)
+
+    def _prune_bytes(self, cfg) -> int:
+        """Drop the oldest rows until the stored payload fits the size cap.
+
+        The row cap never fires on the outputs that fill a disk. One `rg`
+        sweep over a large tree is a single row holding hundreds of megabytes,
+        so a store can pass a 5000-row cap with 127 rows in it and a gigabyte
+        on disk. This counts bytes instead, oldest first, and stops as soon as
+        the total is under the cap.
+        """
+        try:
+            cap = int(cfg.max_store_bytes)
+        except (TypeError, ValueError):
+            return 0
+        if cap <= 0:
+            return 0
+        total = self._payload_bytes()
+        if total <= cap:
+            return 0
+        dropped = 0
+        # Oldest first, one row at a time: rows differ in size by orders of
+        # magnitude, and deleting a batch sized from the average would throw
+        # away far more history than the cap asks for.
+        for rid, size in self.conn.execute(
+            "SELECT id, LENGTH(CAST(raw AS BLOB)) FROM outputs ORDER BY ts ASC"
+        ).fetchall():
+            if total <= cap:
+                break
+            self._delete_ids([rid])
+            total -= size or 0
+            dropped += 1
+        return dropped
+
+    def _payload_bytes(self) -> int:
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(LENGTH(CAST(raw AS BLOB))), 0) FROM outputs"
+        ).fetchone()
+        return int(row[0] or 0)
+
+    def _delete_oldest(self, count: int) -> int:
         old = [
             r[0]
             for r in self.conn.execute(
-                "SELECT id FROM outputs ORDER BY ts ASC LIMIT ?", (excess,)
+                "SELECT id FROM outputs ORDER BY ts ASC LIMIT ?", (count,)
             ).fetchall()
         ]
-        if not old:
+        self._delete_ids(old)
+        return len(old)
+
+    def _delete_ids(self, ids) -> None:
+        if not ids:
             return
-        marks = ",".join("?" * len(old))
-        self.conn.execute(f"DELETE FROM outputs WHERE id IN ({marks})", old)
+        marks = ",".join("?" * len(ids))
+        self.conn.execute(f"DELETE FROM outputs WHERE id IN ({marks})", list(ids))
         if self.has_fts:
-            self.conn.execute(f"DELETE FROM outputs_fts WHERE id IN ({marks})", old)
-        self.conn.commit()
+            self.conn.execute(
+                f"DELETE FROM outputs_fts WHERE id IN ({marks})", list(ids)
+            )
+
+    def _reclaim(self, cfg) -> None:
+        """Give the freed pages back to the filesystem.
+
+        SQLite keeps deleted pages for reuse, so a store that has just dropped
+        900 MB still reports 900 MB to `du` until it is vacuumed. VACUUM
+        rewrites the whole file, which is slow enough that doing it on every
+        prune would be felt on the command being wrapped, so it runs only when
+        the free space is worth the rewrite.
+        """
+        try:
+            page = self.conn.execute("PRAGMA page_size").fetchone()[0]
+            free = self.conn.execute("PRAGMA freelist_count").fetchone()[0]
+            total = self.conn.execute("PRAGMA page_count").fetchone()[0]
+        except sqlite3.Error:
+            return
+        free_bytes = int(page) * int(free)
+        file_bytes = int(page) * int(total)
+        if free_bytes < 33_554_432 and free_bytes < file_bytes // 10:
+            return
+        try:
+            self.conn.execute("VACUUM")
+        except sqlite3.Error:
+            # A vacuum can fail on a locked or read-only file. Nothing is lost
+            # by skipping it: the rows are already gone and the next prune
+            # will try again.
+            pass
 
     def get(self, handle: str) -> Optional[Record]:
         row = self.conn.execute(
