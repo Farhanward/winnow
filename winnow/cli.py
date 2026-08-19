@@ -351,6 +351,25 @@ def cmd_hook(args) -> int:
     return 2
 
 
+def _is_winnow_entry(entry) -> bool:
+    """True if this settings entry is one Winnow installed, in any of its forms."""
+    if not isinstance(entry, dict):
+        return False
+    for spec in entry.get("hooks") or []:
+        if not isinstance(spec, dict):
+            continue
+        command = str(spec.get("command") or "")
+        if "winnow.hook" in command:
+            return True
+        parts = command.split()
+        # `wn hook run`, `winnow hook run`, and either behind a full path.
+        if len(parts) >= 3 and parts[1:3] == ["hook", "run"]:
+            head = os.path.basename(parts[0]).lower()
+            if head in ("wn", "wn.exe", "winnow", "winnow.exe"):
+                return True
+    return False
+
+
 def _hook_install(settings_path: Optional[str]) -> int:
     path = settings_path or os.path.join(
         os.path.expanduser("~"), ".claude", "settings.json")
@@ -367,11 +386,17 @@ def _hook_install(settings_path: Optional[str]) -> int:
     # settings file the whole time the README said it went in; reading only
     # PreToolUse would now leave out the compaction events the read ledger
     # needs to stay correct.
+    #
+    # Winnow's own older entries are removed rather than compared against. An
+    # install from before the console script existed wrote `python -m
+    # winnow.hook`, which is not textually equal to `wn hook run`, so a plain
+    # equality check left both in place and the hook ran twice on every tool
+    # call: two process spawns, two counter updates, and a read ledger that
+    # recorded a file on the first pass and suppressed it on the second.
     for event, entries in snippet["hooks"].items():
-        existing = hooks.setdefault(event, [])
-        for entry in entries:
-            if not any(json.dumps(e) == json.dumps(entry) for e in existing):
-                existing.append(entry)
+        existing = [e for e in hooks.get(event, []) if not _is_winnow_entry(e)]
+        existing.extend(entries)
+        hooks[event] = existing
     os.makedirs(os.path.dirname(path), exist_ok=True)
     open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2))
     _print(f"winnow: hook installed to {path}")
