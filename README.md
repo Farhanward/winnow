@@ -289,9 +289,10 @@ transcripts record 4.59 billion tokens of context read back across 14,955
 billed requests.
 
 `wn agent` reads those transcripts and reports where the tokens went. It reads
-only files the agent already writes, under `~/.claude/projects` and
-`~/.codex/sessions`, and it sends nothing anywhere. The counts are the ones the
-API returned, not an estimate and not a price.
+only files the agents already write, under `~/.claude/projects`,
+`~/.codex/sessions` and `~/.gemini/antigravity/brain`, and it sends nothing
+anywhere. The counts are the ones the provider returned, not an estimate and
+not a price.
 
 ```bash
 wn agent audit           # where the budget went
@@ -303,23 +304,56 @@ wn agent audit --json    # both commands take --json
 The report from the machine this was developed on:
 
 ```
-  sessions          :             28
-  billed requests   :         14,955
-  context re-read   :  4,597,284,920
-  new context       :    141,377,954
-  output            :     21,069,991
+  sessions          :            158
+  billed requests   :         46,546
+  context re-read   :  8,086,515,048
 
-  session floor     :         53,582   paid on every request
-  floor × requests  :    801,318,810   fixed cost
-  subagent requests :          2,760   8.7% of context read
+  median floor      :         24,249   paid on every request
+  floor cost        :  1,568,542,289   summed per runtime
+  subagent requests :          2,760   5.0% of context read
+
+  runtime    files  requests    context re-read      floor    floor cost
+  claude       59    14,995      4,604,140,776     53,582    803,462,090
+  codex       137    31,551      3,482,374,272     24,249    765,080,199
+  gemini       89     9,599        no counters          -              -
 ```
+
+Three runtimes write three different transcripts, so there are three readers.
+
+**Claude Code** writes one JSONL per session under `~/.claude/projects`, with
+the API usage counters on every assistant message, plus a `isSidechain` flag
+that separates subagent requests from the parent's. Full accounting.
+
+**Codex** writes rollout files under `~/.codex/sessions`. Its counters arrive
+as their own `token_count` events and use different names: `input_tokens` is
+the whole prompt with the cached part already inside it, and
+`cached_input_tokens` is that cached part. Adding them the way Claude's columns
+add would count the prefix twice, so the prompt total comes from
+`input_tokens` alone. Full accounting.
+
+**Gemini in Antigravity** writes step transcripts under
+`~/.gemini/antigravity/brain`. They carry no token counters of any kind: 9,599
+steps across 89 sessions here and not one usage number. That is a limit of the
+data rather than of Winnow, so Gemini is reported by activity and its token
+columns read `no counters` instead of `0`. A zero would say the runtime was
+free. Antigravity also writes each session twice, as `transcript.jsonl` and
+`transcript_full.jsonl` with the same steps, so the full one is read and its
+twin is skipped rather than doubling every count.
+
+Format detection is on the shape of the lines, not on the path they were found
+at, so a transcript copied elsewhere or pointed at through
+`WINNOW_TRANSCRIPTS` still reads correctly, and a file in none of the three
+shapes is counted as unrecognised rather than parsed as though it were.
 
 The floor is the number to read first. It is the smallest whole prompt any
 request in a session paid: system prompt, memory files, skill descriptions, and
 the tool schema of every connected MCP server. Nothing in it is work. It is
 re-read on the first request of a session and on the four hundredth, so its
-real cost is the floor times the request count, and on this machine that is
-801 million tokens. Winnow's entire compression history is 0.03% of it.
+real cost is the floor times the request count. That product is summed per
+runtime rather than taken from the blended median, because Claude and Codex sit
+at different floors and one median times the combined request count would
+report a cost neither of them paid. Winnow's entire compression history is
+0.015% of the 1.57 billion above.
 
 `wn agent tools` names what sits in that floor and never gets called:
 

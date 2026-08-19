@@ -11,11 +11,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - `wn agent audit` and `wn agent tools`, which measure the agent's own token
   budget rather than its terminal output. They read the JSONL transcripts the
-  agent already writes under `~/.claude/projects` and `~/.codex/sessions`, send
-  nothing anywhere, and report the counts the API returned. `audit` separates
+  agents already write, send nothing anywhere, and report the counts the
+  provider returned. Three runtimes, three readers: Claude Code under
+  `~/.claude/projects` with usage on every assistant message and a sidechain
+  flag for subagents; Codex under `~/.codex/sessions`, whose `token_count`
+  events name things differently and fold the cached prefix inside
+  `input_tokens`, so the prompt total comes from that column alone rather than
+  from a sum that would count the prefix twice; and Gemini in Antigravity
+  under `~/.gemini/antigravity/brain`, which records no usage counters at all
+  and is therefore reported by activity with its token columns reading `no
+  counters` rather than `0`, since a zero would say the runtime was free.
+  Antigravity writes each session twice and the duplicate is skipped. Format
+  detection is on line shape rather than on path, and a file matching none of
+  the three is counted as unrecognised rather than parsed anyway. `audit` separates
   the session floor, the smallest whole prompt any request in a session paid,
   from the work done on top of it, and multiplies that floor by the request
-  count to show the fixed cost of the prompt prefix. It reports subagent
+  count to show the fixed cost of the prompt prefix, summed per runtime
+  because Claude and Codex sit at different floors and one blended median
+  times the combined request count would report a cost neither of them paid. It reports subagent
   requests as their own line, and lists the tools that returned the most bytes
   into context. `tools` names the MCP servers and plugins that sit in the floor
   of every request and were never called. Both take `--days N` and `--json`.

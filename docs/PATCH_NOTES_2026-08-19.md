@@ -40,6 +40,32 @@ budget. Here they are 2,760 of 14,955 requests and 8.7% of the context read.
 That is smaller than the floor and worth seeing separately, which is why the
 audit reports it as its own line rather than folding it into a total.
 
+### Three runtimes, three readers
+
+The first cut of this read Claude Code only, and counted the other transcripts
+as files while extracting nothing from them, which is worse than not reading
+them: the file count implied a coverage that was not there.
+
+Claude Code puts usage on every assistant message and flags subagent work with
+`isSidechain`. Codex emits `token_count` events of its own and names the
+columns differently, and its `input_tokens` already contains the cached prefix
+that `cached_input_tokens` reports, so the prompt total is that one column
+rather than a sum. Getting this wrong would have inflated every Codex floor by
+the size of its own cache.
+
+Gemini in Antigravity is the honest gap. Its transcripts hold 9,599 steps
+across 89 sessions on this machine and not one token counter, so there is
+nothing to bill and nothing to estimate. It is reported by activity, and its
+token columns read `no counters` rather than `0`, because a zero in a cost
+column says the runtime was free. Antigravity also writes each session twice,
+as `transcript.jsonl` and `transcript_full.jsonl` with identical steps, so
+reading both would have doubled every count it produced.
+
+Detection is on the shape of a line rather than on the directory it was found
+in, so a transcript copied elsewhere still reads correctly and a file in none
+of the three shapes is counted as unrecognised instead of being parsed as
+though it were.
+
 ### What the report does not claim
 
 It cannot price one MCP server. Schema sizes are not in the transcripts, so
@@ -119,7 +145,7 @@ own cap and leaves the others working.
 
 ## Tests
 
-18 new tests: 9 for the transcript reader and 9 for the store caps. The
+25 new tests: 16 for the transcript readers and 9 for the store caps. The
 transcript fixtures are hand-written JSONL in the shape Claude Code writes,
 so the suite does not depend on a real transcript existing on the machine
 running it. The store tests cover the byte cap, the row cap, the per-output
