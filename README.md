@@ -279,6 +279,74 @@ output, paths, prompts, thread IDs, or model names.
 Each runtime updates independently; an unused runtime remains `no data` for any
 length of time and never blocks collection for the others.
 
+## The agent's own budget
+
+Compressing terminal output only reaches the bytes a hook can rewrite. The
+numbers above say how much that is worth, and the honest answer is: less than
+the name Winnow implies. Every output Winnow has ever compressed for Claude
+Code on this machine came to 236,177 tokens read. The same machine's
+transcripts record 4.59 billion tokens of context read back across 14,955
+billed requests.
+
+`wn agent` reads those transcripts and reports where the tokens went. It reads
+only files the agent already writes, under `~/.claude/projects` and
+`~/.codex/sessions`, and it sends nothing anywhere. The counts are the ones the
+API returned, not an estimate and not a price.
+
+```bash
+wn agent audit           # where the budget went
+wn agent audit --days 7  # only recent transcripts
+wn agent tools           # which of your MCP servers earn their place
+wn agent audit --json    # both commands take --json
+```
+
+The report from the machine this was developed on:
+
+```
+  sessions          :             28
+  billed requests   :         14,955
+  context re-read   :  4,597,284,920
+  new context       :    141,377,954
+  output            :     21,069,991
+
+  session floor     :         53,582   paid on every request
+  floor × requests  :    801,318,810   fixed cost
+  subagent requests :          2,760   8.7% of context read
+```
+
+The floor is the number to read first. It is the smallest whole prompt any
+request in a session paid: system prompt, memory files, skill descriptions, and
+the tool schema of every connected MCP server. Nothing in it is work. It is
+re-read on the first request of a session and on the four hundredth, so its
+real cost is the floor times the request count, and on this machine that is
+801 million tokens. Winnow's entire compression history is 0.03% of it.
+
+`wn agent tools` names what sits in that floor and never gets called:
+
+```
+configured but never called in the transcripts read:
+          azure@claude-plugins-official      (settings.json enabledPlugins)
+          claude-mem@thedotmack              (settings.json enabledPlugins)
+          data-engineering@claude-plugins-official
+```
+
+Winnow does not edit your agent configuration and will not offer to. Deciding
+which servers you want loaded is a judgement about how you work, and a tool
+that silently removed one would be trading a token bill for a surprise. The
+report ends at the names; the edit is yours.
+
+Two things it deliberately does not claim. It cannot price a single server,
+because the schema sizes are not in the transcripts, so it reports the floor
+and the call counts and lets you draw the line. And a server that shows as idle
+may simply not have been called in the window you asked for: `--days 7` answers
+a different question from a full scan, and a name that cannot be matched
+confidently is listed as idle rather than quietly counted as used.
+
+The `largest results returned` list is the one place the two halves of Winnow
+meet. `Read` returned 24.9 MB into context on this machine against `Bash`'s
+2.4 MB, and Bash output is the half that already goes through compression.
+That gap is why the `Read` and `Grep` clamps exist.
+
 ## How the pipeline works
 
 1. **Store first:** write the complete raw output to the local recall store.
@@ -293,6 +361,18 @@ length of time and never blocks collection for the others.
 Everything lives under `$WINNOW_HOME` (default `~/.winnow`). The store is local
 and may contain sensitive command output, so protect it like shell history.
 
+It is capped three ways, all in `config.json`, and any of them set to 0 turns
+that cap off. `max_store_rows` (5000) bounds the row count. `max_store_bytes`
+(256 MiB) bounds the payload on disk, oldest rows dropped first, because a row
+cap alone never fires on the outputs that actually fill a disk: one `rg` sweep
+is a single row holding hundreds of megabytes, so a store can pass a 5000-row
+cap with 127 rows in it and a gigabyte on disk. `max_row_bytes` (4 MiB) bounds
+one stored output, keeping the head and recording in the text how much was
+dropped. Token counts are never rewritten by a cap: what an output cost the
+agent is a property of the output, not of how much of it stayed on disk. After
+a prune the file is vacuumed, so the space comes back rather than sitting in
+SQLite's free list.
+
 ## Commands
 
 | Command | Purpose |
@@ -305,6 +385,7 @@ and may contain sensitive command output, so protect it like shell history.
 | `wn skim <file>` | Reduce Python or JSON to its structure |
 | `wn discover` | Find the largest stored token sources |
 | `wn rules [list, path, test]` | Inspect rule packs |
+| `wn agent [audit, tools]` | Audit the agent's own token budget |
 | `wn hook [show, install, run]` | Configure agent integration |
 
 ## Custom rules

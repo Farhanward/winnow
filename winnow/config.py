@@ -49,6 +49,18 @@ class Config:
     keep_tail: int = 20
     # Cap the recall store at this many rows (oldest pruned first).
     max_store_rows: int = 5000
+    # Cap the recall store by size as well as by row count. A row cap alone
+    # never fires on the outputs that actually fill the disk: one `rg` sweep
+    # can store hundreds of megabytes in a single row, so 5000 rows can mean
+    # a gigabyte on disk while the count sits at 127. Oldest rows are dropped
+    # until the stored payload fits, then the file is vacuumed so the space
+    # comes back. 0 turns the size cap off and leaves the row cap alone.
+    max_store_bytes: int = 268_435_456  # 256 MiB
+    # Cap one stored payload. Recall exists so a compressed view is never the
+    # only copy, and the head of a huge output is what a reader actually goes
+    # back for. Anything past this is dropped with a marker line recording how
+    # much went, rather than being kept in full. 0 stores every byte.
+    max_row_bytes: int = 4_194_304  # 4 MiB
 
     # --- input clamping (the PreToolUse hook on Read and Grep) ------------- #
     # These caps do not compress anything. They cap what the agent asks for,

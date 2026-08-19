@@ -9,6 +9,28 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- `wn agent audit` and `wn agent tools`, which measure the agent's own token
+  budget rather than its terminal output. They read the JSONL transcripts the
+  agent already writes under `~/.claude/projects` and `~/.codex/sessions`, send
+  nothing anywhere, and report the counts the API returned. `audit` separates
+  the session floor, the smallest whole prompt any request in a session paid,
+  from the work done on top of it, and multiplies that floor by the request
+  count to show the fixed cost of the prompt prefix. It reports subagent
+  requests as their own line, and lists the tools that returned the most bytes
+  into context. `tools` names the MCP servers and plugins that sit in the floor
+  of every request and were never called. Both take `--days N` and `--json`.
+  Neither edits the agent's configuration: the report ends at the names, and
+  the edit stays with the reader.
+- `max_store_bytes` (256 MiB) and `max_row_bytes` (4 MiB) for the recall store.
+  The existing `max_store_rows` cap counts rows, and the outputs that fill a
+  disk are not numerous but large: one `rg` sweep is a single row holding
+  hundreds of megabytes, which is how a store reached 1.04 GB at 127 rows, 2.5%
+  of its row cap. The byte cap drops the oldest rows one at a time until the
+  payload fits; the row cap keeps the head of one output and records in the
+  stored text how much was dropped, cutting on a character boundary. Token
+  counts are never rewritten by a cap, so `wn gain` reports the same figures
+  either way. 0 turns a cap off, and a value that cannot be read turns off its
+  own cap and leaves the others working.
 - Input clamping for Claude Code's `Read` and `Grep`. Their output is assembled
   inside the agent, where no hook can compress it, so the PreToolUse hook caps
   the request instead: a `head_limit` on a `Grep` that carries none (80 rows in
@@ -35,6 +57,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The recall store grew without bound on disk. `max_store_rows` was the only
+  cap and it counts rows, so a store holding one `rg` sweep per row passed a
+  5000-row check at 127 rows and 1.04 GB. It is now capped by size as well, and
+  a prune vacuums the file so the freed pages go back to the filesystem instead
+  of sitting in SQLite's free list. The vacuum runs only when the free space is
+  worth the rewrite, since VACUUM rewrites the whole database and would
+  otherwise be felt on the command being wrapped.
 - `2>&1` blocked wrapping on the PowerShell path. The chain guard rejected any
   `>`, and a stream merge contains one, so the most common way an agent asks
   for stderr was never compressed. Both shells now use the same file-redirect
