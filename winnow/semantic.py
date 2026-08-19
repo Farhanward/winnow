@@ -31,9 +31,27 @@ def try_json(text: str) -> Optional[Any]:
         return None
 
 
+def _elide(value: Any) -> Any:
+    """Replace a container that sits past the depth limit with a description.
+
+    A bare "…" was three things at once: it hid how much was dropped, it hid
+    what shape was dropped, and it was a plain string, so a reader could not
+    tell an elision from a value that genuinely is an ellipsis. A scalar is
+    returned untouched, because eliding a number or a short string costs a
+    reader information and saves nobody anything.
+    """
+    if isinstance(value, dict):
+        n = len(value)
+        return f"⟨winnow: object with {n} key{'' if n == 1 else 's'} elided at depth limit⟩"
+    if isinstance(value, list):
+        n = len(value)
+        return f"⟨winnow: array of {n} item{'' if n == 1 else 's'} elided at depth limit⟩"
+    return value
+
+
 def _compress_value(value: Any, max_array: int, max_str: int, depth: int) -> Any:
     if depth <= 0:
-        return "…"
+        return _elide(value)
     if isinstance(value, str):
         if len(value) > max_str:
             return value[:max_str] + f"… ⟨+{len(value) - max_str} chars⟩"

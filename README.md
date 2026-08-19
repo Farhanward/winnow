@@ -173,6 +173,13 @@ hook can still do is cap the request, which caps the cost at the source.
   the pattern, which changes what was asked for rather than how much of it comes
   back. There is nothing here to clamp.
 
+Every clamp announces itself. The hook returns `additionalContext` alongside
+the rewritten input, so the model is told what was capped and how to get the
+rest: which lines of the file it is actually looking at, or that matches past
+the `head_limit` exist and were not shown. A cap the model cannot see is the
+one way this feature could do harm. It would read 400 lines of a 12,000-line
+file as a complete file that simply ends there, and reason from it.
+
 All four numbers live in `~/.winnow/config.json` as `grep_head_limit_content`,
 `grep_head_limit_paths`, `read_large_file_bytes` and `read_clamp_lines`. Setting
 any of them to `0` turns that clamp off. A value that is not a number turns its

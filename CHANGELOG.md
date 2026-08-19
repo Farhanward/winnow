@@ -70,6 +70,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A clamped `Read` or `Grep` told the model nothing. The hook rewrote the tool
+  input and the model received 400 lines of a file it had asked for in full,
+  with nothing saying so. The failure mode is a wrong conclusion rather than a
+  missing line: a 12,000-line file read to line 400 looks like a file that ends
+  at line 400. The hook now returns `additionalContext` beside `updatedInput`,
+  naming what was capped and how to get the rest. An unclamped call sends no
+  note, and a limit the caller wrote is still never second-guessed.
+- `compress_json` replaced anything past the depth limit with a bare `"…"`,
+  which hid how much was dropped, what shape was dropped, and that anything was
+  dropped at all, since a plain string is indistinguishable from a value that
+  genuinely is an ellipsis. It now names the elision, as `⟨winnow: object with
+  12 keys elided at depth limit⟩`. A scalar at the depth limit is kept instead
+  of elided: replacing the number 42 with an ellipsis costs a reader
+  information and saves nobody anything.
 - The recall store grew without bound on disk. `max_store_rows` was the only
   cap and it counts rows, so a store holding one `rg` sweep per row passed a
   5000-row check at 127 rows and 1.04 GB. It is now capped by size as well, and
