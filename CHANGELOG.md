@@ -9,6 +9,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- A token brief appended to every subagent prompt, on the `Task` and `Agent`
+  matchers. Subagents were 2,760 of 14,955 requests and 8.7% of all context
+  read on the machine this was measured on, and a `PreToolUse` hook cannot make
+  one cheaper after it spawns; it can send it out briefed. The caller's prompt
+  is appended to, never rewritten, and a prompt already carrying the brief is
+  left alone so nothing is paid twice. This is the one place Winnow spends
+  tokens to save them, about eighty per subagent. `subagent_budget: false`
+  turns it off; `subagent_report_words: 0` drops the word ceiling and keeps the
+  rest.
 - Repeat-read suppression, the first thing Winnow does about input rather than
   output. 66 of 593 matched `Read` calls in the local transcripts asked for the
   same file, session and line range twice, carrying 2.9 MB and roughly 725,000

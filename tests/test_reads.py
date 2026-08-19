@@ -170,12 +170,12 @@ def test_hook_install_writes_the_compaction_events(isolated_home, tmp_path):
     written = json.loads(target.read_text(encoding="utf-8"))
 
     assert set(written["hooks"]) == {"PreToolUse", "PreCompact", "SessionEnd"}
-    assert len(written["hooks"]["PreToolUse"]) == 4
+    assert len(written["hooks"]["PreToolUse"]) == 6
 
     # Installing twice must not double anything.
     cli._hook_install(str(target))
     written = json.loads(target.read_text(encoding="utf-8"))
-    assert len(written["hooks"]["PreToolUse"]) == 4
+    assert len(written["hooks"]["PreToolUse"]) == 6
     assert len(written["hooks"]["PreCompact"]) == 1
 
 
