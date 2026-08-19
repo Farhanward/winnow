@@ -45,6 +45,11 @@ from . import config
 # model may no longer hold what the ledger thinks it holds.
 DEFAULT_WINDOW_SECONDS = 7200
 
+# Below this, two records are the same tool call rather than a repeat. No model
+# asks for the same file twice inside a second; a settings file with two winnow
+# hook entries does exactly that.
+SAME_CALL_SECONDS = 1.0
+
 
 @dataclass
 class Seen:
@@ -130,6 +135,13 @@ class Ledger:
             # genuinely new read rather than a repeat.
             return None
         if window and time.time() - float(served_at or 0) > window:
+            return None
+        if time.time() - float(served_at or 0) < SAME_CALL_SECONDS:
+            # Too soon to be a re-read. A settings file carrying two winnow
+            # entries fires the hook twice for one tool call, and without this
+            # the second pass would suppress the first read of every file. The
+            # installer removes duplicates now; this makes a hand-edited one
+            # harmless rather than harmful.
             return None
         if suppressed:
             # Asked twice. The model is insisting, and it may well be right:

@@ -99,6 +99,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `wn hook install` doubled Winnow's own hooks instead of updating them. An
+  install from before the console script existed wrote `python -m winnow.hook`,
+  which is not textually equal to `wn hook run`, so the equality check left
+  both in place and the hook fired twice on every tool call: two process
+  spawns, two counter updates, and a read ledger that recorded a file on the
+  first pass and suppressed it on the second, so the *first* read of every file
+  came back as a stub. Install now removes Winnow's entries in any of their
+  forms and writes the current ones, leaving other tools' hooks untouched. A
+  same-tool-call guard in the ledger makes a hand-duplicated settings file
+  harmless rather than harmful.
 - A clamped `Read` or `Grep` told the model nothing. The hook rewrote the tool
   input and the model received 400 lines of a file it had asked for in full,
   with nothing saying so. The failure mode is a wrong conclusion rather than a

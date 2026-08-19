@@ -53,8 +53,17 @@ def test_the_first_read_is_served_untouched(isolated_home, source, capsys):
     assert _read(capsys, source) == (None, None)
 
 
-def test_an_immediate_re_read_is_cut_to_a_stub(isolated_home, source, capsys):
+def _age(seconds=5):
+    """Push the ledger back past the same-tool-call guard."""
+    ledger = reads.Ledger()
+    ledger.conn.execute("UPDATE reads SET served_at = served_at - ?", (seconds,))
+    ledger.conn.commit()
+    ledger.close()
+
+
+def test_a_re_read_is_cut_to_a_stub(isolated_home, source, capsys):
     _read(capsys, source)
+    _age()
     updated, note = _read(capsys, source)
 
     assert updated["limit"] == 1
@@ -68,6 +77,7 @@ def test_an_immediate_re_read_is_cut_to_a_stub(isolated_home, source, capsys):
 def test_asking_twice_serves_the_file(isolated_home, source, capsys):
     """Context may have been compacted since. Insisting is always honoured."""
     _read(capsys, source)
+    _age()
     _read(capsys, source)
 
     assert _read(capsys, source) == (None, None)
@@ -196,3 +206,71 @@ def test_the_reads_command_reports_and_clears(isolated_home, source, capsys):
 
     cli.cmd_reads(Namespace(action="stats", limit=20, json=False))
     assert "empty" in capsys.readouterr().out
+
+
+def test_a_double_fired_hook_does_not_suppress_the_first_read(
+    isolated_home, source, capsys
+):
+    """Two winnow entries in one settings file fire the hook twice per call.
+
+    Without a guard the second pass reads its own record back and suppresses
+    the first read of every file the agent opens.
+    """
+    assert _read(capsys, source) == (None, None)
+    assert _read(capsys, source) == (None, None)
+
+
+def test_a_genuine_re_read_after_the_guard_window_is_suppressed(
+    isolated_home, source, capsys
+):
+    _read(capsys, source)
+    _age()
+
+    updated, note = _read(capsys, source)
+    assert updated["limit"] == 1
+
+
+def test_install_replaces_an_older_winnow_entry_instead_of_doubling_it(
+    isolated_home, tmp_path
+):
+    """An install from before the console script wrote `python -m winnow.hook`.
+
+    That is not textually equal to `wn hook run`, so a plain equality check
+    left both in place and the hook ran twice on every tool call.
+    """
+    import json as _json
+
+    from winnow import cli
+
+    target = tmp_path / "settings.json"
+    target.write_text(_json.dumps({"hooks": {"PreToolUse": [
+        {"matcher": "Bash", "hooks": [{"type": "command",
+                                       "command": "python -m winnow.hook"}]},
+        {"matcher": "Read", "hooks": [{"type": "command",
+                                       "command": "python -m winnow.hook"}]},
+    ]}}), encoding="utf-8")
+
+    cli._hook_install(str(target))
+    pre = _json.loads(target.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+
+    assert [e["matcher"] for e in pre] == [
+        "Bash", "PowerShell", "Read", "Grep", "Task", "Agent"]
+    assert all(e["hooks"][0]["command"] == "wn hook run" for e in pre)
+
+
+def test_install_leaves_another_tools_hooks_alone(isolated_home, tmp_path):
+    import json as _json
+
+    from winnow import cli
+
+    target = tmp_path / "settings.json"
+    other = {"matcher": "Bash", "hooks": [{"type": "command",
+                                           "command": "some-other-linter"}]}
+    target.write_text(_json.dumps({"hooks": {"PreToolUse": [other]}}),
+                      encoding="utf-8")
+
+    cli._hook_install(str(target))
+    pre = _json.loads(target.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+
+    assert other in pre
+    assert len(pre) == 7
