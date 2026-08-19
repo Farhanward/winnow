@@ -387,6 +387,28 @@ def cmd_agent(args) -> int:
     return 2
 
 
+def _runtime_rows(report):
+    """One row per runtime whose transcripts were found.
+
+    A runtime with no usage counters in its transcripts prints dashes, never
+    zeros. Antigravity records steps and tool calls and no token of any kind,
+    and a zero in a token column would read as free rather than as unknown.
+    """
+    rows = []
+    for name, rt in sorted(report.runtimes.items()):
+        if not rt.tokens_available:
+            rows.append(
+                f"  {name:<9} {rt.files:>5}  {rt.steps:>8,}  "
+                f"{'no counters':>17}  {'-':>9}  {'-':>13}"
+            )
+            continue
+        rows.append(
+            f"  {name:<9} {rt.files:>5}  {rt.requests:>8,}  "
+            f"{rt.context_read:>17,}  {rt.floor:>9,}  {rt.fixed_cost:>13,}"
+        )
+    return rows
+
+
 def _agent_audit(args) -> int:
     report = agent.scan(days=args.days)
     if not report.files:
@@ -411,6 +433,20 @@ def _agent_audit(args) -> int:
             "tool_calls": dict(tools),
             "tool_result_bytes": dict(heavy),
             "mcp_calls": report.mcp_calls,
+            "runtimes": {
+                name: {
+                    "files": rt.files,
+                    "requests": rt.requests,
+                    "steps": rt.steps,
+                    "tokens_available": rt.tokens_available,
+                    "tokens": rt.totals,
+                    "session_floor": rt.floor,
+                    "floor_cost": rt.fixed_cost,
+                }
+                for name, rt in sorted(report.runtimes.items())
+            },
+            "unreadable_files": report.unreadable,
+            "unrecognised_files": report.unrecognised,
         }, indent=2))
         return 0
 
@@ -426,10 +462,17 @@ def _agent_audit(args) -> int:
     _print(f"  output            : "
            f"{report.totals.get('output_tokens', 0):>14,}")
     _print("─" * 62)
-    _print(f"  session floor     : {report.floor:>14,}   paid on every request")
-    _print(f"  floor × requests  : {report.fixed_cost:>14,}   fixed cost")
+    _print(f"  median floor      : {report.floor:>14,}   paid on every request")
+    _print(f"  floor cost        : {report.fixed_cost:>14,}   summed per runtime")
     _print(f"  subagent requests : {report.subagent_requests:>14,}   "
            f"{report.subagent_share:.1f}% of context read")
+    _print("─" * 62)
+
+    _print("  runtime    files  requests    context re-read      floor    "
+           "floor cost")
+    _print("  " + "─" * 58)
+    for row in _runtime_rows(report):
+        _print(row)
     _print("─" * 62)
 
     if tools:
