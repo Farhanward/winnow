@@ -286,6 +286,57 @@ output, paths, prompts, thread IDs, or model names.
 Each runtime updates independently; an unused runtime remains `no data` for any
 length of time and never blocks collection for the others.
 
+## Reading a file twice
+
+Everything above is about what a command *returns*. This is about what the
+agent *asks for*, and specifically what it asks for twice.
+
+Across the Claude Code transcripts on this machine, 593 `Read` calls whose
+results could be matched carried 24.9 MB into context. 66 of them were the same
+file, in the same session, over the same line range, read again: 2.9 MB, or
+11.7% of everything `Read` returned, roughly 725,000 tokens. For comparison,
+every output Winnow has ever compressed for Claude Code saved 97,348. The
+second copy of a file the model already has is worth more than the whole
+compression side of the tool.
+
+So the hook keeps a ledger of what it has served. When the same range of the
+same file is requested again in the same session, and the file has not changed
+in between, the request is cut to a single line and the model is told why:
+
+```
+winnow suppressed this re-read: you already read config.py in this session
+12 minutes ago, and the file has not changed since (same size and timestamp).
+What you were given then is still current, so use it. If you no longer have
+it, request this exact read again and it will be served in full.
+```
+
+Four things decide against suppressing, and each one exists because getting it
+wrong costs more than the tokens it saves:
+
+- **The file changed.** Size or modification time differs from what was served,
+  so what the model holds is stale and this is a new read, not a repeat. An
+  `Edit` followed by a `Read` is the common shape of this and it always goes
+  through.
+- **The range differs.** Lines 1-400 and lines 400-800 are different content.
+  Offset and limit are part of the ledger key.
+- **It is a different session**, or the record has aged out. Nothing is shared
+  between sessions, and a record older than `dedupe_window_seconds` (2 hours)
+  is forgotten.
+- **The model asked twice.** A suppressed read is marked, and the next
+  identical request is served in full. If the model is insisting, it may well
+  be right: its context could have been compacted since, and the file it was
+  given may no longer be in the window it can see.
+
+That last one is why `wn hook install` now also registers `PreCompact` and
+`SessionEnd`. Compaction rewrites what the model can see, so at that moment the
+ledger forgets the session outright rather than withholding a file the model no
+longer holds.
+
+The fingerprint is size and modification time, not a content hash. This runs on
+every `Read` the agent makes, and hashing a large file on that path would cost
+more than the re-read it is trying to save. Set `dedupe_reads` to `false` in
+`~/.winnow/config.json` to serve every read in full.
+
 ## The agent's own budget
 
 Compressing terminal output only reaches the bytes a hook can rewrite. The
@@ -427,6 +478,7 @@ SQLite's free list.
 | `wn discover` | Find the largest stored token sources |
 | `wn rules [list, path, test]` | Inspect rule packs |
 | `wn agent [audit, tools]` | Audit the agent's own token budget |
+| `wn reads [stats, clear]` | Inspect or reset the repeat-read ledger |
 | `wn hook [show, install, run]` | Configure agent integration |
 
 ## Custom rules

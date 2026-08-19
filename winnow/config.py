@@ -86,6 +86,19 @@ class Config:
     # orientation; a follow-up Read with an explicit offset gets the rest.
     read_clamp_lines: int = 400
 
+    # --- repeated reads --------------------------------------------------- #
+    # 39% of the Read calls measured on the development machine asked for a
+    # file the same session had already been given. When the file has not
+    # changed since, the second copy is spend on content the model already
+    # holds, so the request is cut to a stub and the model is told why. False
+    # turns this off and every read is served in full.
+    dedupe_reads: bool = True
+    # How long a served read stays in the ledger. A session running longer
+    # than this has almost certainly compacted its context, so what the model
+    # can still see is no longer what the ledger recorded. 0 never forgets,
+    # which is only sensible with compaction hooked up.
+    dedupe_window_seconds: int = 7200
+
     @classmethod
     def load(cls) -> "Config":
         cfg = cls()

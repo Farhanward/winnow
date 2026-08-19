@@ -204,10 +204,75 @@ nobody anything.
 
 ---
 
+---
+
+## The input half: reading a file twice
+
+Everything before this compresses what a command returns. The output side is
+also where the field already is: `rtk` compresses shell output for sixteen
+agents and says plainly that it does not touch input tokens; `lean-ctx` and
+`llmtrim` sit in the same lane. The unclaimed half is what the agent asks for.
+
+The measurement first. Across the Claude Code transcripts here, 593 `Read`
+calls whose results could be matched to their request carried 24.9 MB into
+context. 66 of them asked for the same file, in the same session, over the same
+line range, a second time: 2.9 MB, 11.7% of everything `Read` returned, about
+725,000 tokens. Every output Winnow has ever compressed for Claude Code saved
+97,348. The second copy of a file the model already holds is worth more than
+the entire compression side of this tool.
+
+So the hook keeps a ledger of what it has served, keyed on session, absolute
+path, offset and limit, with the file's size and modification time as it stood
+at the time. A request that matches an entry whose stamp still holds is cut to
+a single line, and `additionalContext` says what happened and where the content
+the model already has came from.
+
+### Why a stub and not a denial
+
+A `PreToolUse` deny shows `permissionDecisionReason` to the user, not to the
+model. A denied re-read would leave the agent with a blocked tool call and no
+explanation, which is a good way to make it retry in a loop or invent a reason.
+Capping the request to one line goes through the same `updatedInput` path every
+other clamp already uses, saves within a rounding error of the same tokens, and
+carries an explanation the model can act on.
+
+### Why asking twice always works
+
+The dangerous case is not a wasted read, it is a withheld one. If context has
+been compacted, the file the ledger believes the model holds may no longer be
+in the window it can see, and suppressing the re-read would leave it reasoning
+about a file it cannot look at.
+
+Two things guard that. A suppressed read is marked, and the next identical
+request is served in full: if the model insists, it is taken at its word, and
+the cost of being wrong is one round trip against a whole file. And
+`wn hook install` now registers `PreCompact` and `SessionEnd`, so at the moment
+compaction rewrites the window, the ledger forgets that session outright.
+
+The other three refusals to suppress are simpler. A file whose size or
+modification time changed is a new read, not a repeat, which is what makes an
+`Edit` followed by a `Read` always go through. A different offset or limit is
+different content. A different session shares nothing.
+
+### What it costs to be cheap
+
+The fingerprint is size and modification time rather than a content hash,
+because this runs on every `Read` the agent makes and hashing a large file on
+that path would cost more than the re-read it is saving. The failure mode is a
+file edited to exactly the same length within the same nanosecond stamp, which
+no editor produces. `dedupe_reads: false` turns the whole thing off.
+
+`wn reads` prints what the ledger believes and `wn reads clear` empties it. A
+suppression the user cannot inspect is one they cannot trust.
+
+---
+
 ## Tests
 
-35 new tests: 16 for the transcript readers, 9 for the store caps, 5 for
-clamp transparency and 5 for JSON elision. The
+52 new tests: 17 for the read ledger, 16 for the transcript readers, 9 for the
+store caps, 5 for clamp transparency and 5 for JSON elision. The ledger's cover
+the cases where suppression must *not* happen more heavily than the case where
+it should, because that is where the cost of a mistake is. The
 transcript fixtures are hand-written JSONL in the shape Claude Code writes,
 so the suite does not depend on a real transcript existing on the machine
 running it. The store tests cover the byte cap, the row cap, the per-output

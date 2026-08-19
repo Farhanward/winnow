@@ -9,6 +9,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Repeat-read suppression, the first thing Winnow does about input rather than
+  output. 66 of 593 matched `Read` calls in the local transcripts asked for the
+  same file, session and line range twice, carrying 2.9 MB and roughly 725,000
+  tokens of content the model already held, against 97,348 tokens saved by
+  every compression Winnow has ever done on that runtime. A ledger in
+  `~/.winnow/reads.db` records session, path, range and the file's size and
+  modification time; a request matching an unchanged entry is cut to one line
+  and `additionalContext` explains where the content it already has came from.
+  A stub rather than a denial, because a denied tool call explains itself to
+  the user and not to the model. Suppression never happens when the file
+  changed, the range differs, the session differs, the record aged out
+  (`dedupe_window_seconds`, 2 hours), or the model asks a second time, which is
+  always served in full. `dedupe_reads: false` turns it off.
+- `wn reads` and `wn reads clear` to inspect and empty that ledger. A
+  suppression the user cannot inspect is one they cannot trust.
+- `wn hook install` now registers `PreCompact` and `SessionEnd` alongside the
+  tool matchers, and merges every event in the snippet rather than only
+  `PreToolUse`. Compaction rewrites the window the model can see, so the ledger
+  forgets the session at that moment instead of withholding a file the model no
+  longer holds.
 - `wn agent audit` and `wn agent tools`, which measure the agent's own token
   budget rather than its terminal output. They read the JSONL transcripts the
   agents already write, send nothing anywhere, and report the counts the
