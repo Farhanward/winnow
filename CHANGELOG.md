@@ -9,6 +9,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- A settings reference in the README covering every field in `config.json`,
+  checked against the dataclass so the defaults in the table cannot drift from
+  the defaults in the code.
 - A token brief appended to every subagent prompt, on the `Task` and `Agent`
   matchers. Subagents were 2,760 of 14,955 requests and 8.7% of all context
   read on the machine this was measured on, and a `PreToolUse` hook cannot make
@@ -99,6 +102,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The head-and-tail trim existed twice, once in the built-in filters and once
+  as the `keep_head_tail` rule action, identical but for the word in the
+  marker. Both now call one helper, which is the shape that stops the two
+  copies drifting apart.
+- A line clipped by two rules reported only the second clip. A `rg` hit passes
+  `clip-monster-lines` at 800 characters and then the `ripgrep` rule at 300, and
+  the marker on the result claimed 515 characters were missing when 1,714 were.
+  A marker that undercounts is worse than none: it invites the reader to treat a
+  fragment as nearly whole. Clip counts are cumulative now, and a line already
+  clipped tighter than a later rule asks for is left alone instead of having its
+  marker rewritten.
 - `wn hook install` doubled Winnow's own hooks instead of updating them. An
   install from before the console script existed wrote `python -m winnow.hook`,
   which is not textually equal to `wn hook run`, so the equality check left

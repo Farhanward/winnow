@@ -35,6 +35,26 @@ def fingerprint(line: str) -> str:
     return s.strip()
 
 
+def keep_ends(lines, head: int, tail: int, label: str = "lines"):
+    """Keep the first `head` and last `tail` lines, noting what went.
+
+    One implementation for both callers. The built-in filters and the
+    `keep_head_tail` rule action had a copy each, identical but for the word in
+    the marker, which is the shape a divergence starts as.
+
+    Returns `(lines, hidden)` so a caller that keeps statistics can record the
+    drop without counting the lines a second time.
+    """
+    head = max(0, int(head))
+    tail = max(0, int(tail))
+    if len(lines) <= head + tail + 1:
+        return list(lines), 0
+    hidden = len(lines) - head - tail
+    kept = list(lines[:head]) + [f"… ⟨{hidden} {label} hidden⟩"]
+    kept.extend(lines[len(lines) - tail:] if tail else [])
+    return kept, hidden
+
+
 def collapse_repeats(text: str, threshold: int = 3) -> Tuple[str, int]:
     """Collapse consecutive runs of same-fingerprint lines.
 
