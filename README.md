@@ -259,11 +259,18 @@ costs about one token; measured against the same argv run bare, a passthrough
 lands within 1% either way.
 
 `wn gain` reports a different population and is meant to. It reads the recall
-store, one record per output actually compressed, from the first release
-onward. On the same machine and the same day that is 127 outputs, 106,800,987
-tokens in against 16,655,223 out, 90,145,764 saved, or 84.4%. The efficiency
-counters started later and count runs rather than stored outputs, so the two
-never line up and neither one is the other's total.
+store, one record per output actually compressed. The efficiency counters
+started later and count runs rather than stored outputs, so the two never line
+up and neither one is the other's total.
+
+Read `wn gain` as a view of the store rather than as a lifetime total, because
+that is what it is. On this machine it said 127 outputs and 84.4% while the
+store held two `rg` sweeps worth 102 million tokens between them. The size cap
+then pruned those rows, as it is supposed to, and the same command now says 90
+outputs and 68.3%. Nothing was miscounted either time: the number describes
+what is in the store, and pruning changes what is in the store. A durable
+lifetime figure would have to live in a counter that pruning cannot reach,
+which is a thing Winnow does not have yet.
 
 `gemini` reads `no data` here because the label is new. An unused runtime
 stays that way indefinitely and never blocks collection for the others.
