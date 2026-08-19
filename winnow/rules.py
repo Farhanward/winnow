@@ -56,6 +56,22 @@ def load_rules() -> List[Dict[str, Any]]:
     return rules
 
 
+_CLIP_MARKER = re.compile(r"… ⟨\+(\d+) chars⟩$")
+
+
+def _unclipped(line: str):
+    """Split a line into its body and the characters a previous clip dropped.
+
+    Rules clip independently, so the same line can pass through more than one
+    of them. Without this the last clip overwrites the earlier count and the
+    line claims to be missing far less than it actually is.
+    """
+    match = _CLIP_MARKER.search(line)
+    if not match:
+        return line, 0
+    return line[: match.start()], int(match.group(1))
+
+
 def apply_rules(
     command: str, text: str, rules: List[Dict[str, Any]], cfg
 ) -> Tuple[str, List[str]]:
@@ -146,22 +162,30 @@ def _run_action(key: str, val: Any, text: str, cfg, stats: Dict[str, int]) -> st
         return new
 
     if key == "keep_head_tail" and isinstance(val, (list, tuple)) and len(val) == 2:
-        lines = text.split("\n")
-        head, tail = int(val[0]), int(val[1])
-        if len(lines) > head + tail + 1:
-            hidden = len(lines) - head - tail
-            stats["dropped"] += hidden
-            lines = lines[:head] + [f"… ⟨{hidden} lines hidden⟩"] + lines[-tail:]
+        lines, hidden = patterns.keep_ends(
+            text.split("\n"), int(val[0]), int(val[1]), "lines"
+        )
+        stats["dropped"] += hidden
         return "\n".join(lines)
 
     if key == "max_line_len":
         n = int(val)
         out = []
         for ln in text.split("\n"):
-            if len(ln) > n:
-                out.append(ln[:n] + f"… ⟨+{len(ln) - n} chars⟩")
-            else:
+            body, already = _unclipped(ln)
+            if len(body) <= n:
+                # Covers a line an earlier rule already clipped tighter than
+                # this one asks for. Re-clipping would move the marker without
+                # dropping anything.
                 out.append(ln)
+                continue
+            # The count is cumulative. Two rules can clip the same line, the
+            # generic 800 and a command rule at 300, and reporting only the
+            # second pass told the reader 515 characters were missing when
+            # 1,714 were. A marker that undercounts is worse than no marker:
+            # it invites the reader to treat a fragment as nearly whole.
+            dropped = len(body) - n + already
+            out.append(body[:n] + f"… ⟨+{dropped} chars⟩")
         return "\n".join(out)
 
     if key == "summary" and isinstance(val, str):

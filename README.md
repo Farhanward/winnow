@@ -514,6 +514,31 @@ SQLite's free list.
 | `wn reads [stats, clear]` | Inspect or reset the repeat-read ledger |
 | `wn hook [show, install, run]` | Configure agent integration |
 
+## Every setting
+
+`~/.winnow/config.json` overrides any of these. Setting a cap or a limit to `0`
+turns that one off, and a value that cannot be read turns off its own setting
+rather than failing the call it was meant to shrink.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `min_saving` | `0.15` | Compression below this fraction is discarded and the original passes through |
+| `min_tokens` | `40` | Outputs smaller than this are never compressed |
+| `collapse_threshold` | `3` | Consecutive same-shape lines needed before a run is folded |
+| `keep_head` | `40` | Lines kept at the top when a built-in filter caps a listing |
+| `keep_tail` | `20` | Lines kept at the bottom of the same |
+| `max_store_rows` | `5000` | Recall store row cap, oldest pruned first |
+| `max_store_bytes` | `268435456` | Recall store size cap on disk, oldest pruned first |
+| `max_row_bytes` | `4194304` | Cap on one stored output; the head is kept and the cut is recorded |
+| `grep_head_limit_content` | `80` | `head_limit` given to a content-mode `Grep` that carries none |
+| `grep_head_limit_paths` | `200` | The same for the path-listing modes |
+| `read_large_file_bytes` | `131072` | File size past which a `Read` without a limit gets one |
+| `read_clamp_lines` | `400` | Lines that clamped `Read` asks for |
+| `dedupe_reads` | `true` | Cut a re-read of a file the model was already given |
+| `dedupe_window_seconds` | `7200` | How long a served read stays in the ledger |
+| `subagent_budget` | `true` | Append the token brief to a subagent prompt |
+| `subagent_report_words` | `200` | Word ceiling the brief asks for; `0` drops that line |
+
 ## Custom rules
 
 Add `*.yaml` files to the directory shown by `wn rules path`:

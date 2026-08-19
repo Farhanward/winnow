@@ -5,15 +5,14 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
+from .. import patterns
 from .registry import register
 
 
 def _cap_lines(lines: List[str], head: int, tail: int, label: str) -> List[str]:
     """Keep the first ``head`` and last ``tail`` lines, note what was hidden."""
-    if len(lines) <= head + tail + 1:
-        return lines
-    hidden = len(lines) - head - tail
-    return lines[:head] + [f"… ⟨{hidden} {label} hidden⟩"] + lines[-tail:]
+    kept, _ = patterns.keep_ends(lines, head, tail, label)
+    return kept
 
 
 @register(r"\bgit\s+status\b", "git-status")
