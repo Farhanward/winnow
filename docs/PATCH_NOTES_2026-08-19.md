@@ -143,9 +143,71 @@ own cap and leaves the others working.
 
 ---
 
+---
+
+## An end-to-end review of what gets cut
+
+The question this release was reviewed against: can any layer remove something
+the model then reasons about wrongly? Compression that loses tokens is the
+point. Compression that changes a conclusion is a bug.
+
+Every drop in the pipeline was checked for whether it leaves a mark. Most did
+already. `collapse_repeats` writes `⟨×N similar lines⟩`, `cascade_guard` writes
+`⟨and N more like this⟩`, `limit_per_file` writes `⟨+N more in <file>⟩`,
+`max_line_len` writes `⟨+N chars⟩`, `keep_head_tail` writes `⟨N lines hidden⟩`,
+the built-in filters append their own counts, and the footer carries the token
+delta and the recall handle. Two places did not.
+
+### The clamps were invisible
+
+`Read` and `Grep` are capped by rewriting the tool input, and the model was
+never told. It asked for a file and received 400 lines of it with nothing
+saying so. The failure mode is not a missing line, it is a wrong conclusion: a
+12,000-line file read to line 400 looks like a file that ends at line 400, and
+anything the model concludes about what is not in it is then wrong.
+
+`PreToolUse` hooks can return `additionalContext` alongside `updatedInput`, and
+that is what the clamps now do. A clamped `Read` says which lines are being
+shown, out of a file of what size, and that an explicit `offset` continues it. A
+clamped `Grep` says the limit it was given, that matches past it exist, and that
+an explicit `head_limit` overrides it. An unclamped call sends no note, and an
+explicit limit from the caller is still never second-guessed.
+
+### JSON elision said nothing
+
+Past the depth limit, `compress_json` replaced a subtree with the bare string
+`"…"`. That hid three things at once: how much was dropped, what shape was
+dropped, and the fact that anything was dropped at all, since a plain string is
+indistinguishable from a value that genuinely is an ellipsis. The result was
+still valid JSON, which made it worse: it read as complete.
+
+It now names what it removed, as `⟨winnow: object with 12 keys elided at depth
+limit⟩` or `⟨winnow: array of 40 items elided at depth limit⟩`. A scalar at the
+depth limit is kept rather than elided, which was the other half of the bug:
+replacing the number 42 with an ellipsis costs a reader information and saves
+nobody anything.
+
+### What was checked and left alone
+
+- Exit codes survive a wrapped run, and stderr is kept. A command that fails
+  still reports the failure and the code it failed with.
+- `wn recall` returns the original byte for byte. A 3,000-line output
+  compressed to three lines recalls all 3,000.
+- An `ERROR:` line buried in 800 lines of pip chatter survives. So does a
+  `FAILED` line in a wall of pytest progress dots, and the one distinct error
+  at the end of a 30-line cascade of an unrelated one.
+- Search results keep every matching file represented. Whether the hits fold by
+  fingerprint or by file, each file still appears and each cut is announced.
+- `drop_lines` rules do not append a per-rule count, and that is deliberate:
+  the footer already reports the token delta and the recall handle, and a
+  summary line on each of twenty rules would spend the tokens the rules saved.
+
+---
+
 ## Tests
 
-25 new tests: 16 for the transcript readers and 9 for the store caps. The
+35 new tests: 16 for the transcript readers, 9 for the store caps, 5 for
+clamp transparency and 5 for JSON elision. The
 transcript fixtures are hand-written JSONL in the shape Claude Code writes,
 so the suite does not depend on a real transcript existing on the machine
 running it. The store tests cover the byte cap, the row cap, the per-output

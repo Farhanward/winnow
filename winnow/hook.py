@@ -109,8 +109,13 @@ def settings_snippet(command: str = "wn hook run") -> dict:
     }
 
 
-def _clamped_grep(tool_input: dict, cfg) -> Optional[dict]:
-    """Return a copy of Grep's input with a head_limit, or None to leave it."""
+def _clamped_grep(tool_input: dict, cfg):
+    """Return (input with a head_limit, note), or None to leave the call alone.
+
+    The note goes back to the model. A cap it cannot see is worse than no cap:
+    it would read a truncated result as the whole result and conclude that
+    nothing else matches.
+    """
     if tool_input.get("head_limit") is not None:
         # An explicit head_limit is a decision the caller already made, and
         # that includes an explicit 0 meaning unlimited. Do not second-guess it.
@@ -125,11 +130,21 @@ def _clamped_grep(tool_input: dict, cfg) -> Optional[dict]:
         return None
     updated = dict(tool_input)
     updated["head_limit"] = limit
-    return updated
+    note = (
+        f"winnow set head_limit={limit} on this Grep because the call carried "
+        "none. Results past that row are not shown and there may be more "
+        "matches. Pass an explicit head_limit to override, 0 for unlimited."
+    )
+    return updated, note
 
 
-def _clamped_read(tool_input: dict, cfg) -> Optional[dict]:
-    """Return a copy of Read's input with a line limit, or None to leave it."""
+def _clamped_read(tool_input: dict, cfg):
+    """Return (input with a line limit, note), or None to leave the call alone.
+
+    The note goes back to the model, because the failure mode of a silent cap
+    here is a wrong conclusion rather than a missing line: a file read to line
+    400 of 12,000 looks like a complete file that simply ends there.
+    """
     if tool_input.get("limit") is not None:
         return None
     lines = int(cfg.read_clamp_lines)
@@ -155,7 +170,14 @@ def _clamped_read(tool_input: dict, cfg) -> Optional[dict]:
     updated["limit"] = lines
     # offset is left alone: it says where the caller wanted to start reading,
     # and moving it would return different content, not less of it.
-    return updated
+    start = int(tool_input.get("offset") or 1)
+    note = (
+        f"winnow capped this Read to {lines} lines because the file is "
+        f"{size:,} bytes. You are seeing lines {start}-{start + lines - 1}, "
+        "not the whole file. Read again with an explicit offset to continue, "
+        "or an explicit limit to override the cap."
+    )
+    return updated, note
 
 
 def _clamp_input(short_name: str, tool_input: dict, client: str) -> int:
@@ -169,23 +191,28 @@ def _clamp_input(short_name: str, tool_input: dict, client: str) -> int:
         cfg = _config.Config()
     try:
         if short_name == "Grep":
-            updated = _clamped_grep(tool_input, cfg)
+            clamp = _clamped_grep(tool_input, cfg)
         else:
-            updated = _clamped_read(tool_input, cfg)
+            clamp = _clamped_read(tool_input, cfg)
     except (TypeError, ValueError):
         # config.json is edited by hand and Config.load assigns whatever it
         # finds without checking the type, so a null or a stray string reaches
         # the int() calls above. README says 0 turns a clamp off, which makes
         # null a reasonable guess for a reader after the same thing. A setting
         # we cannot read turns its clamp off; it must never fail the tool call.
-        updated = None
-    efficiency.observe_input(client, clamped=updated is not None)
-    if updated is None:
+        clamp = None
+    efficiency.observe_input(client, clamped=clamp is not None)
+    if clamp is None:
         return 0
+    updated, note = clamp
     decision = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
+            # The model is told what was capped and how to get the rest. A cap
+            # it cannot see is the one way this feature could do harm: it would
+            # read a truncated result as a complete one and reason from it.
+            "additionalContext": note,
             # The complete tool_input, not only the key that changed. The
             # shell path can send {"command": ...} alone because command is
             # the whole of what Bash and PowerShell take; Read and Grep carry

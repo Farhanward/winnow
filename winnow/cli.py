@@ -13,7 +13,6 @@ from typing import List, Optional
 from . import __version__, agent, core, efficiency, hook
 from . import rules as rules_mod
 from . import semantic, tokens
-from .config import Config
 from .filters import all_filters
 from .store import Store, is_handle
 
@@ -317,7 +316,7 @@ def cmd_rules(args) -> int:
     _print(f"built-in filters: {', '.join(all_filters())}")
     _print(f"rules loaded    : {len(rules)}")
     for r in rules:
-        _print(f"  - {r.get('name','?'):24} match={r.get('match','')!r}")
+        _print(f"  - {r.get('name', '?'):24} match={r.get('match', '')!r}")
     return 0
 
 
