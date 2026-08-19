@@ -225,31 +225,38 @@ wn efficiency
 wn efficiency --json
 ```
 
-A real table, from the machine this was developed on:
+A real table, measured on 2026-08-19 on the machine this was developed on:
 
 ```
 runtime     seen/auto   runs  compressed   tokens in→out     saved  clamped  last update
 codex          2/2       939      47  108,650,822→21,351,930   80.3%     0/0    2026-08-11
-claude      2994/404     394      28   232,653→135,393    41.8%     9/183  2026-08-13
+claude      3076/424     411      29   236,177→138,829    41.2%    11/189  2026-08-19
 gemini         0/0         0       0  no data                      0/0    -
 local        202/20       20       0    30,682→30,682      0.0%     0/0    2026-07-25
 ```
 
 Read the columns before reading the percentages. `seen/auto` is the honest one,
 and Claude's covers two eras. Before the wrapping gaps were closed it stood at
-213 selected out of 2,550 inspected, or 8.4%. Since then it is 191 out of 444,
-or 43%. The cumulative 404/2,994 above averages the two eras into 13.5% and so
+213 selected out of 2,550 inspected, or 8.4%. Since then it is 211 out of 526,
+or 40%. The cumulative 424/3,076 above averages the two eras into 13.8% and so
 understates the fix threefold. `codex` shows the opposite shape, two
 observations against 939 runs, because those runs arrived through an explicit
 `wn run` rather than a hook.
 
-Claude's `saved` fell from 61.6% to 41.8% across the same change, which is
+Claude's `saved` fell from 61.6% to 41.2% across the same change, which is
 coverage widening rather than compression weakening. The commands the fix
 brought in are mostly short: a `git status`, a `cd X; cargo test` that prints a
 few lines. They dilute the mean and add almost nothing to the total, while the
 absolute saving keeps climbing. Wrapping an output with nothing to compress
 costs about one token; measured against the same argv run bare, a passthrough
 lands within 1% either way.
+
+`wn gain` reports a different population and is meant to. It reads the recall
+store, one record per output actually compressed, from the first release
+onward. On the same machine and the same day that is 127 outputs, 106,800,987
+tokens in against 16,655,223 out, 90,145,764 saved, or 84.4%. The efficiency
+counters started later and count runs rather than stored outputs, so the two
+never line up and neither one is the other's total.
 
 `gemini` reads `no data` here because the label is new. An unused runtime
 stays that way indefinitely and never blocks collection for the others.
