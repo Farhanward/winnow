@@ -258,19 +258,37 @@ absolute saving keeps climbing. Wrapping an output with nothing to compress
 costs about one token; measured against the same argv run bare, a passthrough
 lands within 1% either way.
 
-`wn gain` reports a different population and is meant to. It reads the recall
-store, one record per output actually compressed. The efficiency counters
-started later and count runs rather than stored outputs, so the two never line
-up and neither one is the other's total.
+`wn gain` reports a lifetime counter in `~/.winnow/savings.db`, written once
+per output and never rewritten. It exists because the figure used to be derived
+from the recall store, which is a cache with a size cap: this machine reported
+127 outputs and 84.4% while the store still held two `rg` sweeps worth 102
+million tokens between them, and 90 outputs and 68.3% once the cap pruned those
+rows. Neither number was miscounted. The command described what the store held,
+and pruning changes what the store holds, so the published history decayed. The
+counter is out of reach of pruning, and `wn gain` still shows the store beside
+it, labelled as the cache it is.
 
-Read `wn gain` as a view of the store rather than as a lifetime total, because
-that is what it is. On this machine it said 127 outputs and 84.4% while the
-store held two `rg` sweeps worth 102 million tokens between them. The size cap
-then pruned those rows, as it is supposed to, and the same command now says 90
-outputs and 68.3%. Nothing was miscounted either time: the number describes
-what is in the store, and pruning changes what is in the store. A durable
-lifetime figure would have to live in a counter that pruning cannot reach,
-which is a thing Winnow does not have yet.
+It counts two things the old figure left out, both because leaving them out
+flattered the result.
+
+**Passthrough.** Every output Winnow looked at and handed back unchanged is in
+the denominator. A reduction measured only over the outputs that compressed
+picks its denominator after seeing the answer, so `wn gain` prints both: the
+rate over what compressed, and the rate over everything the compressor was
+handed. The second is always the smaller number and it is the honest one.
+
+**The tail.** Savings here were dominated by a handful of enormous outputs, and
+an average hides that entirely. The largest single saving is printed next to
+the total with its share, because a total resting on one output is a different
+claim from the same total spread over a thousand.
+
+`wn gain --json` carries both views, and the per-filter breakdown says which
+rules earned their keep. The counter records filter labels, which are Winnow's
+own vocabulary; commands, paths and output never reach it.
+
+The efficiency counters are a third population again: they count runs rather
+than outputs and started later, so the three never line up and none of them is
+another's total.
 
 `gemini` reads `no data` here because the label is new. An unused runtime
 stays that way indefinitely and never blocks collection for the others.

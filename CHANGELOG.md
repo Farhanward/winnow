@@ -9,6 +9,19 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- A lifetime savings counter in `~/.winnow/savings.db`, written once per output
+  and out of reach of store pruning. `wn gain` derived its figure from the
+  recall store, which is a cache with a size cap, so the published history
+  decayed: 127 outputs and 84.4% became 90 and 68.3% the moment the size cap
+  reached two large rows. Neither was miscounted; the command described what
+  the store held. `wn gain` now reports the counter, and shows the store beside
+  it labelled as the cache it is. It also counts what the old figure left out:
+  passthrough outputs go in the denominator, so the reduction is printed both
+  over what compressed and over everything the compressor was handed, and the
+  largest single saving is printed with its share of the total, because a total
+  resting on one output is a different claim from a spread one. `wn gain --json`
+  carries both views plus a per-filter breakdown. Filter labels are recorded;
+  commands, paths and output are not.
 - A settings reference in the README covering every field in `config.json`,
   checked against the dataclass so the defaults in the table cannot drift from
   the defaults in the code.
