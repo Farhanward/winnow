@@ -110,6 +110,8 @@ class Config:
     # Word ceiling the brief asks the subagent to report within. 0 drops that
     # line and leaves the rest of the brief in place.
     subagent_report_words: int = 200
+    # Default report ceiling for ``wn context pack`` worker prompts.
+    context_report_words: int = 120
 
     @classmethod
     def load(cls) -> "Config":

@@ -1,0 +1,210 @@
+{
+  "snapshot_at": "2026-10-11T03:26:15+03:00",
+  "repository": "https://github.com/Farhanward/winnow",
+  "base_head": "4f7f176fe01b45a56b1831e21457be09bfa69eb4",
+  "fetched_origin_main": "4f7f176fe01b45a56b1831e21457be09bfa69eb4",
+  "gain": {
+    "lifetime": {
+      "outputs_seen": 9416,
+      "outputs_compressed": 720,
+      "outputs_passthrough": 8696,
+      "raw_tokens": 35672740,
+      "out_tokens": 2520830,
+      "passthrough_tokens": 47715288,
+      "tokens_saved": 33151910,
+      "reduction_on_compressed_pct": 92.9,
+      "reduction_overall_pct": 39.8,
+      "largest_single_saving": 8639481,
+      "largest_share_pct": 26.1,
+      "first_seen": 1787136519.1549256,
+      "last_seen": 1791678333.9750962
+    },
+    "by_filter": [
+      {
+        "label": "fold-repeats",
+        "outputs": 271,
+        "tokens_saved": 18299185,
+        "reduction_pct": 94.8
+      },
+      {
+        "label": "clip-monster-lines",
+        "outputs": 212,
+        "tokens_saved": 6919409,
+        "reduction_pct": 91.2
+      },
+      {
+        "label": "clip-monster-lines+ripgrep",
+        "outputs": 19,
+        "tokens_saved": 5147309,
+        "reduction_pct": 95.1
+      },
+      {
+        "label": "clip-monster-lines+fold-repeats",
+        "outputs": 8,
+        "tokens_saved": 2116160,
+        "reduction_pct": 94.4
+      },
+      {
+        "label": "clip-monster-lines+fold-repeats+ripgrep",
+        "outputs": 2,
+        "tokens_saved": 308027,
+        "reduction_pct": 53.6
+      },
+      {
+        "label": "fold-repeats+log-streams",
+        "outputs": 4,
+        "tokens_saved": 80283,
+        "reduction_pct": 97.9
+      }
+    ],
+    "store": {
+      "outputs_held": 806,
+      "tokens_in": 65236090,
+      "tokens_out": 11897193,
+      "tokens_saved": 53338897,
+      "reduction_pct": 81.8
+    },
+    "counting": "estimated (heuristic)"
+  },
+  "efficiency": {
+    "codex": {
+      "observed": 19821,
+      "auto_selected": 2894,
+      "inputs_seen": 0,
+      "inputs_clamped": 0,
+      "inputs_clamped_pct": 0.0,
+      "runs": 5408,
+      "compressed": 433,
+      "passthrough": 4975,
+      "tokens_in": 183835596,
+      "tokens_out": 68986755,
+      "tokens_saved": 114848841,
+      "reduction_pct": 62.5,
+      "average_process_ms": 88.0,
+      "updated_at": 1791678369.0732636
+    },
+    "claude": {
+      "observed": 19529,
+      "auto_selected": 5109,
+      "inputs_seen": 7471,
+      "inputs_clamped": 1792,
+      "inputs_clamped_pct": 24.0,
+      "runs": 5049,
+      "compressed": 353,
+      "passthrough": 4696,
+      "tokens_in": 1695902,
+      "tokens_out": 1086541,
+      "tokens_saved": 609361,
+      "reduction_pct": 35.9,
+      "average_process_ms": 61.397,
+      "updated_at": 1791678257.1248596
+    },
+    "gemini": {
+      "observed": 0,
+      "auto_selected": 0,
+      "inputs_seen": 0,
+      "inputs_clamped": 0,
+      "inputs_clamped_pct": 0.0,
+      "runs": 0,
+      "compressed": 0,
+      "passthrough": 0,
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "tokens_saved": 0,
+      "reduction_pct": 0.0,
+      "average_process_ms": 0.0,
+      "updated_at": null
+    },
+    "local": {
+      "observed": 202,
+      "auto_selected": 20,
+      "inputs_seen": 0,
+      "inputs_clamped": 0,
+      "inputs_clamped_pct": 0.0,
+      "runs": 20,
+      "compressed": 0,
+      "passthrough": 20,
+      "tokens_in": 30682,
+      "tokens_out": 30682,
+      "tokens_saved": 0,
+      "reduction_pct": 0.0,
+      "average_process_ms": 14.856,
+      "updated_at": 1785006175.2089682
+    }
+  },
+  "validation": {
+    "tests": 163,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "exit_code": 0,
+    "review": "Corrected fork-default behavior reviewed; no remaining actionable defect.",
+    "focused_subagent_tests": 18
+  },
+  "tool_health": {
+    "unavailable": [
+      {
+        "tool": "claude-mem",
+        "evidence": "Session runtime reports setup incomplete; local registry also describes a quota-paused worker."
+      }
+    ],
+    "disabled_by_configuration": [
+      "claude-mem mcp-search",
+      "headroom",
+      "cua_repl",
+      "colab-mcp"
+    ],
+    "restricted_in_sandbox": [
+      "Git ownership checks",
+      "GitHub CLI configuration access",
+      "writes to local databases"
+    ],
+    "working_checks": [
+      "GitHub authentication",
+      "repository fetch",
+      "winnow gain JSON",
+      "winnow efficiency JSON",
+      "pytest",
+      "Installed wn gain from outside repository",
+      "Editable module resolves to migrated source"
+    ],
+    "not_verified": [
+      "Every connected app and skill",
+      "Every on-demand MCP server"
+    ],
+    "on_demand_sessions": "No MCP session running at status check.",
+    "resolved": [
+      {
+        "tool": "wn installed entry point before repair",
+        "evidence": "Editable installation points at removed C:/Projects/winnow; migrated source is present on D."
+      }
+    ]
+  },
+  "comparison": {
+    "local_base_matches_remote": true,
+    "unpublished_features": [
+      "context pack",
+      "Codex worker hook updates"
+    ],
+    "excluded": [
+      "personal .codex settings",
+      "local graphify outputs",
+      "local database contents",
+      "machine-specific AGENTS.md"
+    ]
+  },
+  "limits": [
+    "Counters are different ledgers with different coverage; do not add them.",
+    "Snapshots describe historical output reduction, not measured billing savings.",
+    "Other compression in the current tool transport is not proven to be this local Winnow installation."
+  ],
+  "installation": {
+    "status": "repaired and verified",
+    "editable": true,
+    "source_matches_migrated_repository": true,
+    "installed_wn_gain_exit_code": 0,
+    "installed_wn_gain_saved_tokens": 33151910,
+    "build": "Isolated build used because the preinstalled setuptools backend is incompatible with Python 3.12."
+  },
+  "last_lifetime_event_at": "2026-10-11T03:25:33+03:00"
+}

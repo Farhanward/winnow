@@ -89,7 +89,8 @@ _SHELL_TOOLS = {"Bash", "PowerShell", "shell_command", "exec_command"}
 # There is nothing here to clamp, so please do not add it back.
 _CLAMP_TOOLS = {"Read", "Grep"}
 # The subagent tool has been called both names across versions.
-_SUBAGENT_TOOLS = {"Task", "Agent"}
+_SUBAGENT_TOOLS = {"Task", "Agent", "spawn_agent", "mcp__collaboration__spawn_agent"}
+_CODEX_SPAWN_TOOLS = {"spawn_agent", "mcp__collaboration__spawn_agent"}
 
 
 def settings_snippet(command: str = "wn hook run") -> dict:
@@ -107,7 +108,10 @@ def settings_snippet(command: str = "wn hook run") -> dict:
                     "matcher": matcher,
                     "hooks": [{"type": "command", "command": command}],
                 }
-                for matcher in ("Bash", "PowerShell", "Read", "Grep", "Task", "Agent")
+                for matcher in (
+                    "Bash", "PowerShell", "Read", "Grep", "Task", "Agent",
+                    "spawn_agent", "mcp__collaboration__spawn_agent",
+                )
             ],
             # Not a tool event. Compaction rewrites what the model can see, so
             # the read ledger has to forget the session when it happens, or it
@@ -171,38 +175,45 @@ def _budget_block(cfg) -> str:
         words = 200
     lines = [
         _BUDGET_MARK,
-        "- Read: pass offset and limit. Never read a whole file to orient.",
-        "- Grep: pass head_limit. Prefer files_with_matches before content mode.",
-        "- Never read a file through the shell, and never re-read a file you "
-        "just edited to verify.",
-        "- Shell output is compressed for you automatically. Do not call `wn` "
-        "yourself.",
+        "- Read bounded ranges with offset and limit.",
+        "- Write changes to files; do not paste code in the report.",
     ]
     if words > 0:
         lines.append(
-            f"- Report in under {words} words: findings and file:line, not a "
-            "restatement of the task."
+            f"- Report under {words} words (configured ceiling): findings and "
+            "file:line."
         )
     return "\n".join(lines)
 
 
-def _budgeted_subagent(tool_input: dict, cfg):
+def _budgeted_subagent(tool_input: dict, cfg, *, codex_spawn: bool = False):
     """Append a token brief to a subagent prompt, or return None to leave it."""
-    if not getattr(cfg, "subagent_budget", True):
-        return None
-    prompt = tool_input.get("prompt")
+    prompt_key = "message" if codex_spawn else "prompt"
+    prompt = tool_input.get(prompt_key)
     if not isinstance(prompt, str) or not prompt.strip():
         return None
+    if not getattr(cfg, "subagent_budget", True):
+        if not codex_spawn or "fork_turns" in tool_input:
+            return None
+        updated = dict(tool_input)
+        updated["fork_turns"] = "none"
+        return updated
     if _BUDGET_MARK in prompt:
         # Already briefed, by a previous hook pass or by the caller's own
         # template. Appending a second copy would spend the tokens twice.
+        if codex_spawn and "fork_turns" not in tool_input:
+            updated = dict(tool_input)
+            updated["fork_turns"] = "none"
+            return updated
         return None
     updated = dict(tool_input)
-    updated["prompt"] = prompt.rstrip() + "\n\n" + _budget_block(cfg)
+    updated[prompt_key] = prompt.rstrip() + "\n\n" + _budget_block(cfg)
+    if codex_spawn and "fork_turns" not in updated:
+        updated["fork_turns"] = "none"
     return updated
 
 
-def _brief_subagent(tool_input: dict) -> int:
+def _brief_subagent(tool_input: dict, *, codex_spawn: bool = False) -> int:
     """Append the token brief to a subagent prompt and emit the full input."""
     from . import config as _config
 
@@ -211,7 +222,7 @@ def _brief_subagent(tool_input: dict) -> int:
     except OSError:
         cfg = _config.Config()
     try:
-        updated = _budgeted_subagent(tool_input, cfg)
+        updated = _budgeted_subagent(tool_input, cfg, codex_spawn=codex_spawn)
     except (TypeError, ValueError):
         # A hand-edited config must never cost the agent a subagent.
         updated = None
@@ -519,7 +530,10 @@ def run_hook(stdin_text: Optional[str] = None) -> int:
     is_codex = bool(event.get("turn_id") or os.environ.get("CODEX_THREAD_ID"))
     client = "codex" if is_codex else "claude"
     if short_name in _SUBAGENT_TOOLS:
-        return _brief_subagent(event.get("tool_input") or {})
+        codex_spawn = tool_name in _CODEX_SPAWN_TOOLS or short_name in _CODEX_SPAWN_TOOLS
+        return _brief_subagent(
+            event.get("tool_input") or {}, codex_spawn=codex_spawn and is_codex
+        )
     if short_name in _CLAMP_TOOLS:
         return _clamp_input(
             short_name,

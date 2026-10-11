@@ -180,12 +180,12 @@ def test_hook_install_writes_the_compaction_events(isolated_home, tmp_path):
     written = json.loads(target.read_text(encoding="utf-8"))
 
     assert set(written["hooks"]) == {"PreToolUse", "PreCompact", "SessionEnd"}
-    assert len(written["hooks"]["PreToolUse"]) == 6
+    assert len(written["hooks"]["PreToolUse"]) == 8
 
     # Installing twice must not double anything.
     cli._hook_install(str(target))
     written = json.loads(target.read_text(encoding="utf-8"))
-    assert len(written["hooks"]["PreToolUse"]) == 6
+    assert len(written["hooks"]["PreToolUse"]) == 8
     assert len(written["hooks"]["PreCompact"]) == 1
 
 
@@ -254,7 +254,8 @@ def test_install_replaces_an_older_winnow_entry_instead_of_doubling_it(
     pre = _json.loads(target.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
 
     assert [e["matcher"] for e in pre] == [
-        "Bash", "PowerShell", "Read", "Grep", "Task", "Agent"]
+        "Bash", "PowerShell", "Read", "Grep", "Task", "Agent",
+        "spawn_agent", "mcp__collaboration__spawn_agent"]
     assert all(e["hooks"][0]["command"] == "wn hook run" for e in pre)
 
 
@@ -273,4 +274,4 @@ def test_install_leaves_another_tools_hooks_alone(isolated_home, tmp_path):
     pre = _json.loads(target.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
 
     assert other in pre
-    assert len(pre) == 7
+    assert len(pre) == 9

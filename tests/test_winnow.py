@@ -403,7 +403,7 @@ def test_codex_hook_rewrites_shell_command(isolated_home, monkeypatch, capsys):
         assert updated == "wn run --client codex -- rg -n TODO C:\\Projects"
 
 
-def test_powershell_tool_is_wrapped_and_encoded(isolated_home, capsys):
+def test_powershell_tool_is_wrapped_and_encoded(isolated_home, capsys, monkeypatch):
     """The PowerShell tool reaches the PowerShell path.
 
     The encoding for it was written from the start and nothing could reach it:
@@ -411,6 +411,7 @@ def test_powershell_tool_is_wrapped_and_encoded(isolated_home, capsys):
     PowerShell call went through uncompressed. On a Windows workstation that is
     most of the output there is.
     """
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     event = json.dumps({
         "tool_name": "PowerShell",
         "tool_input": {"command": "Get-VM"},
@@ -629,7 +630,10 @@ def test_the_hook_snippet_covers_the_tools_it_can_act_on(isolated_home):
         entry["matcher"]
         for entry in hook.settings_snippet()["hooks"]["PreToolUse"]
     ]
-    assert matchers == ["Bash", "PowerShell", "Read", "Grep", "Task", "Agent"]
+    assert matchers == [
+        "Bash", "PowerShell", "Read", "Grep", "Task", "Agent",
+        "spawn_agent", "mcp__collaboration__spawn_agent",
+    ]
     # Glob has no matcher because the hook would have nothing to do in it.
     assert "Glob" not in matchers
 
@@ -645,7 +649,9 @@ def test_install_writes_every_matcher_and_stays_idempotent(tmp_path, capsys):
 
     pre = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
     assert [entry["matcher"] for entry in pre] == [
-        "Bash", "PowerShell", "Read", "Grep", "Task", "Agent"]
+        "Bash", "PowerShell", "Read", "Grep", "Task", "Agent",
+        "spawn_agent", "mcp__collaboration__spawn_agent",
+    ]
 
 
 def test_gemini_runs_are_counted(tmp_path):

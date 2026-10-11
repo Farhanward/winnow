@@ -10,7 +10,8 @@ import sys
 import time
 from typing import List, Optional
 
-from . import __version__, agent, core, efficiency, hook, reads, savings
+from . import __version__, agent, context, core, efficiency, hook, reads, savings
+from .config import Config
 from . import rules as rules_mod
 from . import semantic, tokens
 from .filters import all_filters
@@ -676,6 +677,28 @@ def cmd_reads(args) -> int:
     return 0
 
 
+def cmd_context_pack(args) -> int:
+    try:
+        report_words = args.report_words
+        if report_words is None:
+            report_words = Config.load().context_report_words
+        result = context.pack(
+            args.references,
+            task=args.task,
+            owns=args.owns,
+            checks=args.check,
+            report_words=report_words,
+        )
+    except (OSError, ValueError) as exc:
+        _print(f"winnow: {exc}")
+        return 2
+    if args.json:
+        _print(json.dumps(result, indent=2))
+    else:
+        _print(result["prompt"])
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # parser
 # --------------------------------------------------------------------------- #
@@ -759,6 +782,17 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("action", choices=["show", "run", "install"])
     h.add_argument("--settings", help="path to settings.json for install")
     h.set_defaults(func=cmd_hook)
+
+    c = sub.add_parser("context", help="build compact worker context")
+    csub = c.add_subparsers(dest="context_command", required=True)
+    cp = csub.add_parser("pack", help="make a fresh-worker reference prompt")
+    cp.add_argument("references", nargs="+", help="reference files to read")
+    cp.add_argument("--task", required=True, help="worker task")
+    cp.add_argument("--owns", action="append", default=[], help="path the worker may edit")
+    cp.add_argument("--check", action="append", default=[], help="acceptance check")
+    cp.add_argument("--report-words", type=int, default=None)
+    cp.add_argument("--json", action="store_true", help="machine-readable output")
+    cp.set_defaults(func=cmd_context_pack)
 
     return p
 

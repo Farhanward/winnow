@@ -9,6 +9,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- `wn context pack` builds a short prompt for a fresh worker from exact file
+  references, owned paths, acceptance checks, and a report-word ceiling. It
+  reports the estimated tokens in the prompt and in the referenced files. It
+  reduces duplicated worker context through references and a fresh-session
+  policy, without rewriting protected system prompt text, hidden reasoning,
+  the current conversation, or code tokens already generated.
+
 - A lifetime savings counter in `~/.winnow/savings.db`, written once per output
   and out of reach of store pruning. `wn gain` derived its figure from the
   recall store, which is a cache with a size cap, so the published history

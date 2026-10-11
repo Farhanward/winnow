@@ -79,6 +79,20 @@ wn recall a1b2c3 --lines 40-80
 wn recall "connection refused"
 ```
 
+Build a compact prompt for a fresh worker with exact file references:
+
+```bash
+wn context pack "docs/design notes.md" --task "Implement the parser" \
+  --owns winnow/parser.py --check "python -m pytest tests/test_parser.py"
+```
+
+The worker is told to read the listed paths, edit owned paths directly, run the
+acceptance checks, start without an inherited conversation, and return a short
+report. File contents are never copied into the prompt. This reduces duplicated
+worker context through path references and a fresh-session policy. It does not
+rewrite the protected system prompt, hidden reasoning, current conversation, or
+code tokens already generated. Add `--json` for token estimates.
+
 ## Reproducible benchmark
 
 Run `python benchmarks/benchmark.py` to execute Winnow's real pipeline against

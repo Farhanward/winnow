@@ -61,6 +61,41 @@ def test_both_names_of_the_subagent_tool_are_covered(isolated_home, capsys):
     assert _spawn(capsys, {"prompt": "go"}, tool="Agent") is not None
 
 
+def test_codex_spawn_defaults_to_no_fork(isolated_home, capsys, monkeypatch):
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread")
+
+    updated = _spawn(capsys, {"message": "go"}, tool="spawn_agent")
+
+    assert updated["fork_turns"] == "none"
+    assert "Token budget (winnow):" in updated["message"]
+
+
+def test_codex_spawn_preserves_explicit_fork(isolated_home, capsys, monkeypatch):
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread")
+
+    updated = _spawn(
+        capsys, {"message": "go", "fork_turns": "all"}, tool="spawn_agent"
+    )
+
+    assert updated["fork_turns"] == "all"
+
+
+def test_claude_agent_schema_has_no_fork_field(isolated_home, capsys):
+    updated = _spawn(capsys, {"prompt": "go"}, tool="Agent")
+
+    assert "fork_turns" not in updated
+
+
+def test_namespaced_codex_spawn_is_briefed(isolated_home, capsys, monkeypatch):
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread")
+
+    updated = _spawn(
+        capsys, {"message": "go"}, tool="mcp__collaboration__spawn_agent"
+    )
+
+    assert updated["fork_turns"] == "none"
+
+
 def test_briefing_twice_is_refused(isolated_home, capsys):
     once = _spawn(capsys, {"prompt": "go"})
 
@@ -71,6 +106,17 @@ def test_a_prompt_that_already_carries_a_budget_is_left_alone(isolated_home, cap
     written_by_hand = "Do the thing.\n\nToken budget (winnow): be brief."
 
     assert _spawn(capsys, {"prompt": written_by_hand}) is None
+
+
+def test_codex_prebriefed_message_still_defaults_to_no_fork(
+    isolated_home, capsys, monkeypatch
+):
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread")
+    message = "go\n\nToken budget (winnow): already present"
+
+    updated = _spawn(capsys, {"message": message}, tool="spawn_agent")
+
+    assert updated == {"message": message, "fork_turns": "none"}
 
 
 def test_a_call_without_a_prompt_is_left_alone(isolated_home, capsys):
@@ -84,6 +130,31 @@ def test_the_brief_can_be_turned_off(isolated_home, capsys):
     )
 
     assert _spawn(capsys, {"prompt": "go"}) is None
+
+
+def test_disabled_brief_still_defaults_codex_fork(isolated_home, capsys, monkeypatch):
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread")
+    (config.home() / "config.json").write_text(
+        json.dumps({"subagent_budget": False}), encoding="utf-8"
+    )
+
+    assert _spawn(capsys, {"message": "go"}, tool="spawn_agent") == {
+        "message": "go",
+        "fork_turns": "none",
+    }
+
+
+def test_disabled_brief_does_not_mutate_explicit_codex_fork(
+    isolated_home, capsys, monkeypatch
+):
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread")
+    (config.home() / "config.json").write_text(
+        json.dumps({"subagent_budget": False}), encoding="utf-8"
+    )
+
+    assert _spawn(
+        capsys, {"message": "go", "fork_turns": "all"}, tool="spawn_agent"
+    ) is None
 
 
 def test_a_zero_word_ceiling_drops_only_that_line(isolated_home, capsys):
